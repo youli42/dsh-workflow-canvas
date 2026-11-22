@@ -419,7 +419,6 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
             branches: {
               type: 'array',
               items: { type: 'string', enum: branches.map((b) => b.id) },
-              maxItems: multiMatch ? branches.length : 1,
               description: multiMatch
                 ? 'All matching branch ids to execute in parallel (empty array if none match).'
                 : 'At most one best-matching branch id (empty array if none match).',

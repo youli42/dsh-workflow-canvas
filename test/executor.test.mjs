@@ -1166,8 +1166,22 @@ test('switch/case condition node routes 3+ named branches and blocks ancestor si
   assert.equal(rPatch.status, 'done');
   assert.deepEqual(spawned, ['scan', 'router', 'patch']);
   assert.equal(specs.get('patch').childId, 'kid-scan', 'patch resumes scan warm session when selected');
-  assert.deepEqual(specs.get('router').outputSchema.properties.branches.items.enum, ['通过', '小修', '重做']);
-  assert.equal(specs.get('router').outputSchema.properties.branches.maxItems, 1);
+  const schema = specs.get('router').outputSchema;
+  assert.deepEqual(schema.properties.branches.items.enum, ['通过', '小修', '重做']);
+  // Guard against DSH's strict JSON schema subset (rejects maxItems/minItems/etc.).
+  const ALLOWED_SCHEMA_KEYS = new Set(['type', 'oneOf', 'properties', 'required', 'additionalProperties', 'items', 'enum', 'const', 'description']);
+  const checkSchemaKeys = (obj) => {
+    if (!obj || typeof obj !== 'object') return;
+    for (const key of Object.keys(obj)) {
+      assert.ok(ALLOWED_SCHEMA_KEYS.has(key), 'unsupported DSH outputSchema keyword: ' + key);
+      if (key === 'properties' && obj.properties) {
+        for (const prop of Object.values(obj.properties)) checkSchemaKeys(prop);
+      } else if (key === 'items') {
+        checkSchemaKeys(obj.items);
+      }
+    }
+  };
+  checkSchemaKeys(schema);
   assert.deepEqual(rPatch.branchSkipped.sort(), ['推倒重做', '直接发布']);
   assert.equal(rPatch.decisions[0].branch, '小修');
 
