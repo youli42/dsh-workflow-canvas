@@ -77,7 +77,18 @@ Every subagent node can be configured independently:
 
 ---
 
-### 4. Enable and run
+### 4. Conditional branching & dynamic pruning
+
+Drop a **Condition** node anywhere in the graph to route downstream automatically based on upstream outputs:
+
+- Supports default binary **`Yes / No`**, multi-way **`switch/case`** via **`+ Case`** (e.g. `Pass / Minor Fix / Rewrite`), and **`Single / Multi`** match modes.
+- Unchosen branches are pruned automatically without spawning; if zero branches match or the condition node itself fails, it never guesses — it skips intermediate branches and hands off to the nearest downstream Lead.
+
+![3-way switch/case conditional routing and automatic branch pruning](docs/images/condition-switch-run.gif)
+
+---
+
+### 5. Enable and run
 
 Press **`● ON`** at the top-left of the canvas, then send your task in chat (while enabled, a per-session runtime context notifies the agent automatically):
 
@@ -89,7 +100,7 @@ Press **`● ON`** at the top-left of the canvas, then send your task in chat (w
 
 ---
 
-### 5. Inspect live subagent runs
+### 6. Inspect live subagent runs
 
 Active nodes glow blue with animated flow wires and turn green when done. **Click the status badge (`Running ↗` / `Done ↗`) at the bottom-left of any subagent node** to open its conversation pane:
 
@@ -100,7 +111,9 @@ Active nodes glow blue with animated flow wires and turn green when done. **Clic
 ## Let the agent draw or edit the canvas from chat
 
 - **Sketch from one sentence** (`canvas_generate`): *"Build a parallel research workflow on the canvas: two subagents investigate competitors and feasibility, pause for me to decide, then write the plan."*
-- **Patch in place** (`canvas_inspect` + `canvas_patch`): *"Inspect the current canvas, turn Memory on for feasibility, and add a read-only cost-estimate node wired into plan synthesis."* (Preserves your layout.)
+- **Patch in place** (`canvas_inspect` + `canvas_patch`): *"Upgrade the condition node to 3 branches (Pass / Minor Fix / Rewrite) and re-wire downstream."* (Updates in place while preserving your layout.)
+
+![In-place canvas editing from chat via canvas_patch](docs/images/chat-patch-canvas.gif)
 
 ## Shortcuts & controls
 
