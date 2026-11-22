@@ -62,13 +62,13 @@ When `canvas_workflow` runs, `executePlan` executes the following pipeline:
 1. **Entry stripping & task override**: The entry `lead` node is stripped (`withoutEntry`) and never spawned. If `args.task` is provided, it overrides `plan.task` for this run (allowing blank-task templates to be reused straight from chat).
 2. **Cycle validation (Kahn topological sort)**: `orderNodes` validates the DAG is acyclic (the client also blocks cycles interactively via `wouldCycle`).
 3. **Reachability pruning**: BFS from `'lead'` filters out disconnected nodes. Unreachable nodes are drawn dashed, skipped at run time, and listed in `skipped` without burning tokens.
-4. **Event-driven concurrency pool & resumable pauses**:
-   - Progress per session is tracked in `runBySession` (`{ sig, done, results, labels, failed }`).
-   - Instead of a strict per-wave barrier, the executor runs an **event-driven concurrency pool (`inFlight` + `Promise.race`, `MAX_PARALLEL = 4`)**:
+4. **Event-driven concurrency pool, conditional pruning & partial resume**:
+   - In-progress state lives in `runBySession`, and each completed or halted run is snapshotted into `lastRunBySession`.
+   - Instead of a strict per-wave barrier, the executor runs an **event-driven concurrency pool (`inFlight` + `Promise.race`, default 4, configurable 1–8)**:
      - The instant any running subagent finishes, newly unblocked downstream subagents launch immediately — fast branches never stall waiting for slower siblings.
-     - Once no runnable subagents remain and only downstream **non-entry Lead nodes** are ready (entry Lead never pauses) without a `leadResult`, execution pauses with `status: "need-lead"`, returning collected results, any failures, and `session` child IDs.
-   - The conversation performs that Lead step and calls `canvas_workflow({ leadResult: "..." })` to resume seamlessly.
-   - Changing the graph (different plan `sig`) or passing `reset: true` discards paused progress and restarts cleanly.
+     - **Condition nodes (`kind: "condition"`)** run as lightweight read-only (`minimal`) judges with a strict structured `outputSchema` (supporting binary `if/else`, multi-way `switch/case`, and `multiMatch` parallel fan-out). Unmatched outgoing edges are blocked and unchosen branches are pruned via ancestor-aware BFS (so an upstream `session-ref` side wire cannot bypass a vetoed branch). If zero branches match or the condition node itself fails, it never guesses a branch — it skips intermediate branches and hands off to the nearest downstream Lead (or halts cleanly if none exists).
+     - Intermediate **non-entry Lead nodes** pause with `status: "need-lead"`; a **terminal Lead** (zero remaining downstream work) finishes in one shot with `status: "done"` and `finalLead`.
+   - **`retryFailed: true`** and **`fromNodes: [...]`** reuse succeeded outputs from `lastRunBySession` and re-run only failed/target nodes plus their downstream; `reset: true` discards progress and starts from scratch.
 
 ```mermaid
 sequenceDiagram
@@ -123,7 +123,7 @@ The three link types are distinct runtime channels, not just visual colour codin
 1. **Node tagging**: `spawnOnce` tags every spawned child with `label: "<node.label>#<node.id>"`.
 2. **Catalog projection tracking**: While a turn runs (every 700ms, plus on mount and turn completion), the client reads `subagentCatalog` and `subagentTiming` from `sessions.list`, matching `/#([^\s#]+)$/` to map each child back to its canvas node (`running` / `done` / `failed`) and latest `childId`.
 3. **Lead `⏸ Ready` detection**: For non-entry Lead nodes, the client highlights **`⏸ Ready`** as soon as all upstream subagents are `done` and no downstream node has started yet.
-4. **Jump to live chat**: Clicking any subagent's status pill (e.g. `Running ↗`, `Done ↗`) opens `dsh-resource://subagentchat/session/<childId>?parent=<sessionId>&mode=<mode>` via `sidebarRight.openResource(..., { kind: 'subagentchat', preferNewPane: true })`.
+4. **Jump to live chat**: Clicking any subagent's bottom-left status pill (e.g. `Running ↗`, `Done ↗`) opens `dsh-resource://subagentchat/session/<childId>?parent=<sessionId>&mode=<mode>` via `sidebarRight.openResource(..., { kind: 'subagentchat', preferNewPane: true })`.
 
 ---
 

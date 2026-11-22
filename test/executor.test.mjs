@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { apply, orderNodes, upstreamOf, downstreamLabels, briefFor, withoutEntry, analyzeCanvasWarnings, normalizeCanvas, applyPatch, inspectPlan, sessionIdFromContext, buildActiveCanvasContext, isPermissionFailure, executePlan } from '../index.js';
+import { apply, orderNodes, upstreamOf, downstreamLabels, briefFor, parseConditionDecision, withoutEntry, analyzeCanvasWarnings, normalizeCanvas, applyPatch, inspectPlan, sessionIdFromContext, buildActiveCanvasContext, isPermissionFailure, executePlan } from '../index.js';
 
 test('withoutEntry strips the entry Lead', () => {
   const nodes = [
@@ -948,4 +948,434 @@ test('retryFailed and fromNodes reuse succeeded nodes and re-run only failed/tar
   assert.equal(r3.status, 'done');
   assert.deepEqual(spawned, ['c']);
   assert.deepEqual(r3.reused.sort(), ['节点A', '节点B']);
+});
+
+test('parseConditionDecision parses structured, JSON prose, binary, and multi-way switch/case verdicts', () => {
+  const b1 = parseConditionDecision({ structured: { pass: true, reason: 'all ok' } }, '');
+  assert.equal(b1.pass, true);
+  assert.equal(b1.branch, 'true');
+  assert.equal(b1.reason, 'all ok');
+
+  const b2 = parseConditionDecision({}, '结论如下：{"pass": false, "reason": "单测失败"}');
+  assert.equal(b2.pass, false);
+  assert.equal(b2.branch, 'false');
+  assert.equal(b2.reason, '单测失败');
+
+  assert.equal(parseConditionDecision({}, 'true - passed').pass, true);
+  assert.equal(parseConditionDecision({}, 'failed to build').pass, false);
+
+  const sw = parseConditionDecision(
+    { structured: { branch: '小修', reason: '只有一处拼写问题' } },
+    '',
+    ['通过', '小修', '重做'],
+  );
+  assert.equal(sw.branch, '小修');
+  assert.equal(sw.branchLabel, '小修');
+  assert.equal(sw.reason, '只有一处拼写问题');
+});
+
+test('condition node routes true/false branches, prunes unchosen path, and converges cleanly into Lead', async () => {
+  let verdict = { pass: true, reason: '测试全通过' };
+  const spawned = [];
+  const specs = new Map();
+  const scope = {
+    subagents: {
+      startActivation(spec) {
+        const id = spec.label.split('#')[1];
+        spawned.push(id);
+        specs.set(id, spec);
+        if (id === 'gate') {
+          return Promise.resolve({
+            childId: 'kid-gate',
+            result: Promise.resolve({
+              structured: verdict,
+              output: [{ type: 'text', text: JSON.stringify(verdict) }],
+              stopReason: 'completed',
+            }),
+            dispose: () => Promise.resolve(),
+          });
+        }
+        return Promise.resolve({
+          childId: 'kid-' + id,
+          result: Promise.resolve({ output: [{ type: 'text', text: 'out:' + id }], stopReason: 'completed' }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+  const canvas = normalizeCanvas({
+    task: '条件分流测试',
+    nodes: [
+      { id: 'run', kind: 'agent', label: '执行测试', role: '跑测试' },
+      { id: 'gate', kind: 'condition', label: '是否通过', role: '判断测试是否全通过' },
+      { id: 'yes_node', kind: 'agent', label: '打包发布', role: '整理发布' },
+      { id: 'no_node', kind: 'agent', label: '定位修复', role: '修 bug' },
+      { id: 'review', kind: 'lead', label: 'Lead 终审', role: '汇总交付' },
+    ],
+    edges: [
+      { from: 'lead', to: 'run', type: 'prompt' },
+      { from: 'run', to: 'gate', type: 'prompt' },
+      { from: 'gate', to: 'yes_node', type: 'prompt', branch: 'true' },
+      { from: 'gate', to: 'no_node', type: 'prompt', branch: 'false' },
+      { from: 'yes_node', to: 'review', type: 'prompt' },
+      { from: 'no_node', to: 'review', type: 'prompt' },
+    ],
+  });
+  assert.ok(!canvas.error);
+  const plan = { task: canvas.task, nodes: withoutEntry(canvas.nodes), edges: canvas.edges };
+
+  // Branch 1: pass=true -> runs yes_node, skips no_node, converges to terminal Lead
+  const rTrue = await executePlan(scope, plan, {}, { agent: { id: 's-cond-true' }, signal: new AbortController().signal });
+  assert.equal(rTrue.status, 'done');
+  assert.deepEqual(spawned, ['run', 'gate', 'yes_node']);
+  assert.equal(specs.get('gate').agentPreset, 'minimal', 'condition node always runs with minimal preset');
+  assert.ok(specs.get('gate').outputSchema, 'condition node requests structured boolean outputSchema');
+  assert.deepEqual(rTrue.branchSkipped, ['定位修复']);
+  assert.equal(rTrue.decisions.length, 1);
+  assert.equal(rTrue.decisions[0].pass, true);
+  assert.equal(rTrue.finalLead.label, 'Lead 终审');
+  assert.deepEqual(rTrue.finalLead.needs, ['打包发布'], 'converging Lead only depends on the active branch');
+
+  // Branch 2: pass=false -> runs no_node, skips yes_node, converges to terminal Lead
+  spawned.length = 0;
+  verdict = { pass: false, reason: '存在 2 个失败用例' };
+  const rFalse = await executePlan(scope, plan, {}, { agent: { id: 's-cond-false' }, signal: new AbortController().signal });
+  assert.equal(rFalse.status, 'done');
+  assert.deepEqual(spawned, ['run', 'gate', 'no_node']);
+  assert.deepEqual(rFalse.branchSkipped, ['打包发布']);
+  assert.equal(rFalse.decisions[0].pass, false);
+  assert.deepEqual(rFalse.finalLead.needs, ['定位修复']);
+});
+
+test('upstream failure feeding a condition node routes to false branch instead of halting', async () => {
+  const spawned = [];
+  const scope = {
+    subagents: {
+      startActivation(spec) {
+        const id = spec.label.split('#')[1];
+        spawned.push(id);
+        if (id === 'run') {
+          return Promise.resolve({
+            childId: 'kid-run',
+            result: Promise.resolve({
+              output: [{ type: 'text', text: 'Error: EACCES permission denied' }],
+              stopReason: 'failed',
+            }),
+            dispose: () => Promise.resolve(),
+          });
+        }
+        if (id === 'gate') {
+          const promptText = Array.isArray(spec.prompt) ? spec.prompt.map((b) => b.text || '').join('\n') : String(spec.prompt || '');
+          const sawFailure = promptText.includes('执行失败');
+          return Promise.resolve({
+            childId: 'kid-gate',
+            result: Promise.resolve({
+              structured: { pass: !sawFailure, reason: sawFailure ? '上游报错' : '成功' },
+              output: [{ type: 'text', text: '' }],
+              stopReason: 'completed',
+            }),
+            dispose: () => Promise.resolve(),
+          });
+        }
+        return Promise.resolve({
+          childId: 'kid-' + id,
+          result: Promise.resolve({ output: [{ type: 'text', text: 'fallback handled' }], stopReason: 'completed' }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+  const plan = {
+    task: '异常兜底分流',
+    nodes: [
+      { id: 'run', kind: 'agent', label: '执行', role: '执行' },
+      { id: 'gate', kind: 'condition', label: '成功了吗', role: '判断是否成功' },
+      { id: 'ok_step', kind: 'agent', label: '继续', role: '继续' },
+      { id: 'err_step', kind: 'agent', label: '降级方案', role: '降级处理' },
+    ],
+    edges: [
+      { from: 'lead', to: 'run', type: 'prompt' },
+      { from: 'run', to: 'gate', type: 'prompt' },
+      { from: 'gate', to: 'ok_step', type: 'prompt', branch: 'true' },
+      { from: 'gate', to: 'err_step', type: 'prompt', branch: 'false' },
+    ],
+  };
+  const res = await executePlan(scope, plan, {}, { agent: { id: 's-cond-fail-route' }, signal: new AbortController().signal });
+  assert.equal(res.status, 'done', 'must not circuit-break when upstream failure feeds a condition node');
+  assert.deepEqual(spawned, ['run', 'gate', 'err_step']);
+  assert.deepEqual(res.branchSkipped, ['继续']);
+  assert.equal(res.decisions[0].pass, false);
+});
+
+test('switch/case condition node routes 3+ named branches and blocks ancestor side session-ref bypass', async () => {
+  let chosenBranch = '小修';
+  const spawned = [];
+  const specs = new Map();
+  const scope = {
+    subagents: {
+      startActivation(spec) {
+        const id = spec.label.split('#')[1];
+        spawned.push(id);
+        specs.set(id, spec);
+        if (id === 'router') {
+          return Promise.resolve({
+            childId: 'kid-router',
+            result: Promise.resolve({
+              structured: { branch: chosenBranch, reason: '命中 ' + chosenBranch },
+              output: [{ type: 'text', text: '' }],
+              stopReason: 'completed',
+            }),
+            dispose: () => Promise.resolve(),
+          });
+        }
+        return Promise.resolve({
+          childId: 'kid-' + id,
+          result: Promise.resolve({ output: [{ type: 'text', text: 'out:' + id }], stopReason: 'completed' }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+  const canvas = normalizeCanvas({
+    task: '三态代码审查分流',
+    nodes: [
+      { id: 'scan', kind: 'agent', label: '代码实现', role: '实现代码' },
+      { id: 'router', kind: 'condition', label: '审查分级', role: '按严重程度分流', branches: ['通过', '小修', '重做'] },
+      { id: 'ship', kind: 'agent', label: '直接发布', role: '发布' },
+      { id: 'patch', kind: 'agent', label: '局部修复', role: '接着原会话修小问题' },
+      { id: 'redo', kind: 'agent', label: '推倒重做', role: '重新设计' },
+      { id: 'final', kind: 'lead', label: 'Lead 终审', role: '验收' },
+    ],
+    edges: [
+      { from: 'lead', to: 'scan', type: 'prompt' },
+      { from: 'scan', to: 'router', type: 'prompt' },
+      { from: 'router', to: 'ship', type: 'prompt', branch: '通过' },
+      { from: 'router', to: 'patch', type: 'prompt', branch: '小修' },
+      { from: 'scan', to: 'patch', type: 'session-ref' },
+      { from: 'router', to: 'redo', type: 'prompt', branch: '重做' },
+      { from: 'ship', to: 'final', type: 'prompt' },
+      { from: 'patch', to: 'final', type: 'prompt' },
+      { from: 'redo', to: 'final', type: 'prompt' },
+    ],
+  });
+  assert.ok(!canvas.error);
+  const plan = { task: canvas.task, nodes: withoutEntry(canvas.nodes), edges: canvas.edges };
+
+  // Case 1: picks '小修' -> patch runs AND resumes scan's warm session via side session-ref!
+  const rPatch = await executePlan(scope, plan, {}, { agent: { id: 's-switch-patch' }, signal: new AbortController().signal });
+  assert.equal(rPatch.status, 'done');
+  assert.deepEqual(spawned, ['scan', 'router', 'patch']);
+  assert.equal(specs.get('patch').childId, 'kid-scan', 'patch resumes scan warm session when selected');
+  assert.deepEqual(specs.get('router').outputSchema.properties.branches.items.enum, ['通过', '小修', '重做']);
+  assert.equal(specs.get('router').outputSchema.properties.branches.maxItems, 1);
+  assert.deepEqual(rPatch.branchSkipped.sort(), ['推倒重做', '直接发布']);
+  assert.equal(rPatch.decisions[0].branch, '小修');
+
+  // Case 2: picks '通过' -> patch MUST stay pruned even though scan --session-ref--> patch exists!
+  spawned.length = 0;
+  chosenBranch = '通过';
+  const rShip = await executePlan(scope, plan, {}, { agent: { id: 's-switch-ship' }, signal: new AbortController().signal });
+  assert.equal(rShip.status, 'done');
+  assert.deepEqual(spawned, ['scan', 'router', 'ship'], 'side session-ref from ancestor must not bypass blocked branch');
+  assert.deepEqual(rShip.branchSkipped.sort(), ['局部修复', '推倒重做']);
+  assert.deepEqual(rShip.finalLead.needs, ['直接发布']);
+});
+
+test('condition node handles multiMatch parallel branches and zero-match full skip cleanly', async () => {
+  let matched = ['前端', '文档'];
+  const spawned = [];
+  const scope = {
+    subagents: {
+      startActivation(spec) {
+        const id = spec.label.split('#')[1];
+        spawned.push(id);
+        if (id === 'router') {
+          return Promise.resolve({
+            childId: 'kid-router',
+            result: Promise.resolve({
+              structured: { branches: matched, reason: matched.length ? '命中多个' : '均不满足' },
+              output: [{ type: 'text', text: '' }],
+              stopReason: 'completed',
+            }),
+            dispose: () => Promise.resolve(),
+          });
+        }
+        return Promise.resolve({
+          childId: 'kid-' + id,
+          result: Promise.resolve({ output: [{ type: 'text', text: 'done:' + id }], stopReason: 'completed' }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+  const canvas = normalizeCanvas({
+    task: '多选与零命中测试',
+    nodes: [
+      { id: 'audit', kind: 'agent', label: '代码体检', role: '体检' },
+      { id: 'router', kind: 'condition', label: '分发器', role: '按问题多选分发', branches: ['前端', '后端', '文档'], multiMatch: true },
+      { id: 'fe', kind: 'agent', label: '修前端', role: '前端' },
+      { id: 'be', kind: 'agent', label: '修后端', role: '后端' },
+      { id: 'doc', kind: 'agent', label: '改文档', role: '文档' },
+      { id: 'final', kind: 'lead', label: 'Lead 终审', role: '汇总' },
+    ],
+    edges: [
+      { from: 'lead', to: 'audit', type: 'prompt' },
+      { from: 'audit', to: 'router', type: 'prompt' },
+      { from: 'router', to: 'fe', type: 'prompt', branch: '前端' },
+      { from: 'router', to: 'be', type: 'prompt', branch: '后端' },
+      { from: 'router', to: 'doc', type: 'prompt', branch: '文档' },
+      { from: 'fe', to: 'final', type: 'prompt' },
+      { from: 'be', to: 'final', type: 'prompt' },
+      { from: 'doc', to: 'final', type: 'prompt' },
+    ],
+  });
+  const plan = { task: canvas.task, nodes: withoutEntry(canvas.nodes), edges: canvas.edges };
+
+  // Multi-match: 前端 + 文档 run in parallel, 后端 is pruned, final Lead receives both!
+  const rMulti = await executePlan(scope, plan, {}, { agent: { id: 's-multi' }, signal: new AbortController().signal });
+  assert.equal(rMulti.status, 'done');
+  assert.ok(spawned.includes('fe') && spawned.includes('doc') && !spawned.includes('be'));
+  assert.deepEqual(rMulti.branchSkipped, ['修后端']);
+  assert.deepEqual(rMulti.decisions[0].branches, ['前端', '文档']);
+  assert.deepEqual(rMulti.finalLead.needs.sort(), ['修前端', '改文档']);
+
+  // Zero-match with downstream terminal Lead: skips intermediate branches and jumps directly to Lead 终审 with status notice!
+  spawned.length = 0;
+  matched = [];
+  const rZero = await executePlan(scope, plan, {}, { agent: { id: 's-zero' }, signal: new AbortController().signal });
+  assert.equal(rZero.status, 'done');
+  assert.deepEqual(spawned, ['audit', 'router']);
+  assert.deepEqual(rZero.decisions[0].branches, []);
+  assert.equal(rZero.decisions[0].fallbackLead, 'Lead 终审');
+  assert.deepEqual(rZero.branchSkipped.sort(), ['修前端', '修后端', '改文档']);
+  assert.equal(rZero.finalLead.label, 'Lead 终审');
+  assert.deepEqual(rZero.finalLead.needs, ['分发器']);
+  assert.ok(rZero.hint.includes('均未命中') && rZero.hint.includes('直接转交'));
+
+  // Zero-match with intermediate Lead -> pauses at that nearest Lead (`need-lead`) with notice, then runs downstream after leadResult!
+  const midCanvas = normalizeCanvas({
+    task: '中间 Lead 兜底测试',
+    nodes: [
+      { id: 'audit', kind: 'agent', label: '体检', role: '体检' },
+      { id: 'router', kind: 'condition', label: '分发器', role: '分流', branches: ['前端', '后端'] },
+      { id: 'fe', kind: 'agent', label: '修前端', role: '前端' },
+      { id: 'be', kind: 'agent', label: '修后端', role: '后端' },
+      { id: 'gate', kind: 'lead', label: 'Lead 拍板', role: '人工拍板' },
+      { id: 'wrap', kind: 'agent', label: '收尾报告', role: '写报告' },
+    ],
+    edges: [
+      { from: 'lead', to: 'audit', type: 'prompt' },
+      { from: 'audit', to: 'router', type: 'prompt' },
+      { from: 'router', to: 'fe', type: 'prompt', branch: '前端' },
+      { from: 'router', to: 'be', type: 'prompt', branch: '后端' },
+      { from: 'fe', to: 'gate', type: 'prompt' },
+      { from: 'be', to: 'gate', type: 'prompt' },
+      { from: 'gate', to: 'wrap', type: 'prompt' },
+    ],
+  });
+  const midPlan = { task: midCanvas.task, nodes: withoutEntry(midCanvas.nodes), edges: midCanvas.edges };
+  spawned.length = 0;
+  const rMidPause = await executePlan(scope, midPlan, {}, { agent: { id: 's-zero-mid' }, signal: new AbortController().signal });
+  assert.equal(rMidPause.status, 'need-lead', 'jumps straight to nearest intermediate Lead instead of pruning it');
+  assert.equal(rMidPause.node.label, 'Lead 拍板');
+  assert.deepEqual(spawned, ['audit', 'router']);
+  assert.deepEqual(rMidPause.branchSkipped.sort(), ['修前端', '修后端']);
+  assert.ok(rMidPause.hint.includes('均未命中') && rMidPause.hint.includes('直接转交'));
+
+  // Resume after Lead decision -> downstream 'wrap' executes cleanly!
+  spawned.length = 0;
+  const rMidDone = await executePlan(scope, midPlan, { leadResult: '无需修复，直接出报告' }, { agent: { id: 's-zero-mid' }, signal: new AbortController().signal });
+  assert.equal(rMidDone.status, 'done');
+  assert.deepEqual(spawned, ['wrap']);
+});
+
+test('failed condition node never guesses a branch, hands off to nearest Lead or halts, and recovers via retryFailed', async () => {
+  let crashGate = true;
+  const spawned = [];
+  const scope = {
+    subagents: {
+      startActivation(spec) {
+        const id = spec.label.split('#')[1];
+        spawned.push(id);
+        if (id === 'gate') {
+          if (crashGate) return Promise.reject(new Error('429 rate limit'));
+          return Promise.resolve({
+            childId: 'kid-gate-ok',
+            result: Promise.resolve({
+              structured: { pass: true, reason: '重试后判定通过' },
+              output: [{ type: 'text', text: '' }],
+              stopReason: 'completed',
+            }),
+            dispose: () => Promise.resolve(),
+          });
+        }
+        return Promise.resolve({
+          childId: 'kid-' + id,
+          result: Promise.resolve({ output: [{ type: 'text', text: 'out:' + id }], stopReason: 'completed' }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+
+  // Case A: Downstream Lead exists -> skips all branch subagents (never guesses false!), jumps to Lead with failure notice
+  const withLead = {
+    task: '条件节点崩溃测试',
+    nodes: [
+      { id: 'run', kind: 'agent', label: '执行', role: '执行' },
+      { id: 'gate', kind: 'condition', label: '是否通过', role: '判断' },
+      { id: 'yes_s', kind: 'agent', label: '发布', role: '发布' },
+      { id: 'no_s', kind: 'agent', label: '回滚', role: '回滚' },
+      { id: 'final', kind: 'lead', label: 'Lead 终审', role: '终审' },
+    ],
+    edges: [
+      { from: 'lead', to: 'run', type: 'prompt' },
+      { from: 'run', to: 'gate', type: 'prompt' },
+      { from: 'gate', to: 'yes_s', type: 'prompt', branch: 'true' },
+      { from: 'gate', to: 'no_s', type: 'prompt', branch: 'false' },
+      { from: 'yes_s', to: 'final', type: 'prompt' },
+      { from: 'no_s', to: 'final', type: 'prompt' },
+    ],
+  };
+  const sidA = 's-cond-crash-lead';
+  const rFailLead = await executePlan(scope, withLead, {}, { agent: { id: sidA }, signal: new AbortController().signal });
+  assert.equal(rFailLead.status, 'done');
+  assert.deepEqual(spawned, ['run', 'gate'], 'neither yes_s nor no_s may run when condition node crashed');
+  assert.equal(rFailLead.failed.length, 1);
+  assert.equal(rFailLead.failed[0].id, 'gate');
+  assert.equal(rFailLead.decisions[0].failed, true);
+  assert.equal(rFailLead.finalLead.label, 'Lead 终审');
+  assert.ok(rFailLead.hint.includes('自身执行失败') && rFailLead.hint.includes('retryFailed'));
+
+  // Retry failed -> reuses 'run' from cache, re-runs only 'gate' and the newly chosen 'yes_s'!
+  spawned.length = 0;
+  crashGate = false;
+  const rRecovered = await executePlan(scope, withLead, { retryFailed: true }, { agent: { id: sidA }, signal: new AbortController().signal });
+  assert.equal(rRecovered.status, 'done');
+  assert.deepEqual(spawned, ['gate', 'yes_s'], 'reuses upstream run and executes winning branch');
+  assert.deepEqual(rRecovered.reused, ['执行']);
+  assert.deepEqual(rRecovered.branchSkipped, ['回滚']);
+
+  // Case B: No downstream Lead -> halts cleanly instead of guessing a branch
+  const noLead = {
+    task: '无 Lead 条件崩溃测试',
+    nodes: [
+      { id: 'run', kind: 'agent', label: '执行', role: '执行' },
+      { id: 'gate', kind: 'condition', label: '是否通过', role: '判断' },
+      { id: 'yes_s', kind: 'agent', label: '发布', role: '发布' },
+      { id: 'no_s', kind: 'agent', label: '回滚', role: '回滚' },
+    ],
+    edges: [
+      { from: 'lead', to: 'run', type: 'prompt' },
+      { from: 'run', to: 'gate', type: 'prompt' },
+      { from: 'gate', to: 'yes_s', type: 'prompt', branch: 'true' },
+      { from: 'gate', to: 'no_s', type: 'prompt', branch: 'false' },
+    ],
+  };
+  spawned.length = 0;
+  crashGate = true;
+  const rHalted = await executePlan(scope, noLead, {}, { agent: { id: 's-cond-crash-nolead' }, signal: new AbortController().signal });
+  assert.equal(rHalted.status, 'halted');
+  assert.deepEqual(spawned, ['run', 'gate']);
+  assert.ok(rHalted.error.includes('自身执行失败') && rHalted.error.includes('retryFailed'));
 });

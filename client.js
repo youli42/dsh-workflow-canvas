@@ -37,6 +37,8 @@ window.__ModuleLoader__.load({
     const PORT = 12;
     const SOCKET_BAND_TOP = 176;
     const ROW_H = 18;
+    const COND_ROW_H = 20;
+    const BRANCH_COLORS = ['#3fb950', '#e5534b', '#2f81f7', '#d29922', '#a371f7', '#39c5cf', '#f778ba', '#f0883e'];
     const CONTENT_W = 2400;
     const CONTENT_H = 1600;
     /** World origin offset: keeps negative node coordinates inside the scroll area. */
@@ -101,13 +103,29 @@ window.__ModuleLoader__.load({
     const LANG_KEY = STORAGE_PREFIX + 'lang';
     const I18N = {
       zh: {
-        addAgent: '+ 子代理', addLead: '+ Lead', undo: '↶ 撤销', sync: '↥ 同步',
+        addAgent: '+ 子代理', addLead: '+ Lead', addCond: '+ 条件', undo: '↶ 撤销', sync: '↥ 同步',
         enabled: '● 已启用', disabled: '○ 已禁用', presetName: '预设名', save: '☆ 保存',
         presets: '☰ 预设', unsaved: '有未同步改动', synced: '已同步',
         pickModel: '选择模型', defaultEffort: '默认',
         leadThis: 'Lead（本对话）',
-        tipSocketOut: '拖出可断开 / 拖入可连接',
+        tipSocketOut: '通用输入口（接收 prompt / structured / session / 条件分支）；拖出可断开最近一条连线',
         tipSocketIn: '从这里拖出连线 / 也可以把输入口拖到这里',
+        tipCondTrue: '条件满足（pass=true）时走这条分支，连到任意下游节点左侧入口',
+        tipCondFalse: '条件不满足（pass=false）时走这条分支，连到任意下游节点左侧入口',
+        tipBranchOut: '命中该分支时走这条连线，拖到任意下游节点左侧入口',
+        branchTrue: '是',
+        branchFalse: '否',
+        addBranch: '+ 分支',
+        branchPh: '分支名',
+        delBranchTip: '删除该分支（至少保留 2 路）',
+        matchSingle: '单选',
+        matchMulti: '多选',
+        tipMatchMode: '单选：最多命中 1 条最匹配分支（全不满足则跳过中间分支并直达最近 Lead）；多选：所有满足条件的分支同时并行执行，全不满足则直达最近 Lead',
+        tipExpandEdit: '展开大输入框编辑',
+        tipExpandBranch: '展开大输入框编辑该分支的条件',
+        branchEditTitle: '分支条件',
+        condLabel: '条件',
+        condPh: '判断条件或分流规则：例如成功走「是」，失败走「否」',
         delNodeTip: '删除节点（可用 ↶ 撤销 找回）',
         deletedNode: '节点已删除，可点「撤销」找回',
         orphanTip: '未连线：运行时会被跳过',
@@ -127,7 +145,10 @@ window.__ModuleLoader__.load({
         fallbackModel: '备用',
         stPending: '未执行', stRunning: '进行中', stDone: '已完成', stFailed: '失败',
         stOrphan: '未连线', stLead: '由对话执行', stLeadReady: '待拍板',
-        presetEmpty: '还没有保存过预设', del: '删除这个预设',
+        presetEmpty: '保存后可在任意新对话一键载入', del: '删除这个预设',
+        presetSaveTitle: '保存当前画布（可在新会话一键载入）',
+        presetNamePh: '起个名字后回车保存…',
+        myPresets: '我的预设（跨会话复用）',
         needName: '请先给预设起个名字', duplicate: '已存在，请换一个名字',
         savedPreset: '已保存预设', saveFailed: '保存失败（存储不可用）',
         loadedPreset: '已载入预设', invalidPreset: '预设内容无效', deletedPreset: '已删除预设',
@@ -153,18 +174,18 @@ window.__ModuleLoader__.load({
         tipToggle: '启用/禁用此画布（启用后我才能执行它）',
         helpBody: [
           '1. 在入口 Lead 里写「本次任务」，这是整张图的总目标。',
-          '2. 点「+ 子代理」加节点，从右侧输出口拖到另一个节点左侧输入口即可连线。',
-          '3. 连线有三种：prompt 传文本，structured 传 JSON，session 让下游接着上游的会话跑。',
-          '4. 端口颜色即类型，只能同色相连；拖已连接的左口可以断开。',
-          '5. 每个节点可设模型、推理强度、能力范围、备用模型、是否记忆。',
+          '2. 点「+ 子代理 / + Lead / + 条件」加节点，从右侧输出口拖到另一个节点左侧输入口即可连线。',
+          '3. 输出口决定连线类型：prompt（灰，纯文本）、structured（蓝，JSON）、session（紫，复用上游会话）；条件节点支持多路分支（单选 switch/case 或多选并行，全不满足时跳过中间分支直达最近 Lead）。',
+          '4. 节点左侧为统一通用输入口，可直接接收任意颜色的连线；拖已连接的左口可断开最近一条连线。',
+          '5. 每个节点可设模型、推理强度、能力范围、备用模型、是否记忆；复杂任务/分工/条件可点 ⤢ 展开大框编辑。',
           '6. 连好后点「● 已启用」，然后对对话说「跑一次」，由我调用执行。',
           '7. 遇到 Lead 节点会暂停，我做完再把结果交回去继续。',
           '8. 没连线的节点显示为虚线，运行时会被跳过。',
           '9. 右键按住划过一条连线可以切断；可在「⋯」里关掉这个手势。',
-          '10. 预设名 + ☆ 保存 可以把整张图存下来，新对话里从「☰ 预设」载入。',
+          '10. 点右上角「☰ 预设」顶部即可保存当前画布，开新对话时一键载入跨会话复用。',
           '11. 你可以直接让我改画布：说「把那三个节点的分工改成…」，我会就地修改，不动你摆的位置。',
           '12. session 线连到 Lead 时，我会在暂停那步拿到那个子代理的会话，可以继续追问它。',
-          '13. 按住鼠标中键（或空格 + 左键）拖动画布平移；点击子代理节点右下角状态可直达它的对话记录。',
+          '13. 按住鼠标中键（或空格 + 左键）拖动画布平移；点击子代理节点左下角状态可直达它的对话记录。',
           '14. 快捷键：Shift+A 在光标处新建节点，Ctrl+D 复制选中节点，Delete 批量删除，Ctrl+Z 撤销，Esc 关闭弹窗。',
         ].join('\n'),
         openChat: '会话',
@@ -180,7 +201,6 @@ window.__ModuleLoader__.load({
         cycleBlocked: '不能形成环，已阻止连线',
         leadToLeadBlocked: 'Lead 节点不能直接连到另一个 Lead，请在中间放入子代理',
         builtinTemplates: '内置示例模板',
-        myPresets: '我的预设',
         duplicatedNodes: '已复制节点',
         deletedNodes: '已删除节点（可用 ↶ 撤销）',
         addMenuTitle: '新建节点 (Shift+A)',
@@ -199,8 +219,8 @@ window.__ModuleLoader__.load({
         importNone: '剪贴板里没有可识别的画布数据',
         importBad: '画布数据格式不对',
         tipSync: '把当前画布同步给 Host（会在对话里留一条同步记录）',
-        tipUndo: '撤销上一步结构改动', tipSave: '把当前画布保存为预设',
-        tipPresets: '载入已保存的预设', tipModel: '推理等级（默认 = 该模型声明的 defaultEffort）',
+        tipUndo: '撤销上一步结构改动', tipSave: '把当前画布保存为预设（可在新会话载入）',
+        tipPresets: '保存当前画布、跨会话复用，或载入内置模板', tipModel: '推理等级（默认 = 该模型声明的 defaultEffort）',
         tipMemory: '记忆：复用这个节点上一次的会话（跨运行及重启后可恢复）',
         memLatest: '最新',
         memLatestOpt: '自动（最新记忆）',
@@ -213,13 +233,29 @@ window.__ModuleLoader__.load({
         lang: 'ZH',
       },
       en: {
-        addAgent: '+ Subagent', addLead: '+ Lead', undo: '↶ Undo', sync: '↥ Sync',
+        addAgent: '+ Subagent', addLead: '+ Lead', addCond: '+ Condition', undo: '↶ Undo', sync: '↥ Sync',
         enabled: '● ON', disabled: '○ OFF', presetName: 'Preset name', save: '☆ Save',
         presets: '☰ Presets', unsaved: 'Unsaved changes', synced: 'Synced',
         pickModel: 'Pick a model', defaultEffort: 'default',
         leadThis: 'Lead (this chat)',
-        tipSocketOut: 'Drag to detach / drop to connect',
+        tipSocketOut: 'Universal input (accepts prompt / structured / session / branch); drag away to detach latest link',
         tipSocketIn: 'Drag out to link, or drop an input here',
+        tipCondTrue: 'Runs when condition passes (pass=true); connect to any downstream input',
+        tipCondFalse: 'Runs when condition fails (pass=false); connect to any downstream input',
+        tipBranchOut: 'Runs when this branch matches; connect to any downstream input',
+        branchTrue: 'Yes',
+        branchFalse: 'No',
+        addBranch: '+ Case',
+        branchPh: 'Branch name',
+        delBranchTip: 'Remove this branch (minimum 2)',
+        matchSingle: 'Single',
+        matchMulti: 'Multi',
+        tipMatchMode: 'Single: pick at most 1 best-matching branch (if none match, skip branches and jump to nearest Lead). Multi: run all matching branches in parallel (if none match, jump to nearest Lead).',
+        tipExpandEdit: 'Expand larger editor',
+        tipExpandBranch: 'Expand larger editor for this branch condition',
+        branchEditTitle: 'Branch condition',
+        condLabel: 'Condition',
+        condPh: 'Condition or switch rule, e.g. pass vs minor fix vs rewrite',
         delNodeTip: 'Delete this node (undo with ↶)',
         deletedNode: 'Node deleted, use Undo to restore it',
         orphanTip: 'Unlinked: skipped when the canvas runs',
@@ -239,7 +275,10 @@ window.__ModuleLoader__.load({
         fallbackModel: 'Fallback',
         stPending: 'Pending', stRunning: 'Running', stDone: 'Done', stFailed: 'Failed',
         stOrphan: 'Unlinked', stLead: 'Runs in chat', stLeadReady: 'Ready',
-        presetEmpty: 'No presets saved yet', del: 'Delete this preset',
+        presetEmpty: 'Saved canvases appear here in every new chat', del: 'Delete this preset',
+        presetSaveTitle: 'Save current canvas (reuse in any new chat)',
+        presetNamePh: 'Name this canvas…',
+        myPresets: 'Saved presets (all sessions)',
         needName: 'Name the preset first', duplicate: 'already exists, pick another name',
         savedPreset: 'Saved preset', saveFailed: 'Save failed (storage unavailable)',
         loadedPreset: 'Loaded preset', invalidPreset: 'Preset content is invalid', deletedPreset: 'Deleted preset',
@@ -265,18 +304,18 @@ window.__ModuleLoader__.load({
         tipToggle: 'Enable or disable this canvas (I can only run it while enabled)',
         helpBody: [
           '1. Write the overall task in the entry Lead node.',
-          '2. Add nodes with the + buttons, then drag from a right socket to a left socket.',
-          '3. Links carry text (prompt), JSON (structured), or continue the upstream session (session).',
-          '4. Socket colour is the type; only matching types connect. Drag a connected input to detach.',
-          '5. Each node sets model, reasoning, capability scope, fallback model and memory.',
+          '2. Add nodes with + Subagent / + Lead / + Condition, then drag from a right socket to a left socket.',
+          '3. Output sockets choose channel type: prompt (grey text), structured (blue JSON), session (purple warm session), or multi-way condition branches (single switch/case or parallel multi-match; jumps to nearest Lead if none match).',
+          '4. Every node has one universal left input that accepts any incoming wire; drag a connected input away to detach the latest wire.',
+          '5. Each node sets model, reasoning, capability scope, fallback model and memory; click ⤢ to expand a larger editor for long text.',
           '6. Press ● ON, then ask in chat to run the canvas.',
           '7. The run pauses at every Lead node so the conversation can do that step.',
           '8. Unlinked nodes are dashed and skipped at run time.',
           '9. Hold the right button and sweep across a link to cut it; turn the gesture off under ⋯.',
-          '10. Name a preset and press ☆ Save to keep the canvas for other sessions.',
+          '10. Open ☰ Presets to save the current canvas at the top and load it in any new chat.',
           '11. You can ask me to edit the canvas; I patch it in place and keep your layout.',
           '12. A session link into a Lead step hands me that child agent, so I can follow up with it.',
-          '13. Hold the middle mouse button (or Space + drag) to pan; click a subagent status badge to open its chat.',
+          '13. Hold the middle mouse button (or Space + drag) to pan; click a subagent status badge at the bottom-left to open its chat.',
           '14. Shortcuts: Shift+A adds a node at cursor, Ctrl+D duplicates, Delete removes selected, Ctrl+Z undoes, Esc closes popups.',
         ].join('\n'),
         openChat: 'Chat',
@@ -292,7 +331,6 @@ window.__ModuleLoader__.load({
         cycleBlocked: 'Cannot create a cycle',
         leadToLeadBlocked: 'Cannot link a Lead directly to another Lead; place a subagent in between',
         builtinTemplates: 'Starter templates',
-        myPresets: 'Saved presets',
         duplicatedNodes: 'Duplicated nodes',
         deletedNodes: 'Deleted nodes (use Undo to restore)',
         addMenuTitle: 'Add node (Shift+A)',
@@ -311,8 +349,8 @@ window.__ModuleLoader__.load({
         importNone: 'No canvas data found in the clipboard',
         importBad: 'Canvas data is malformed',
         tipSync: 'Publish this canvas to the host (leaves one sync record in the chat)',
-        tipUndo: 'Undo the last structural change', tipSave: 'Save this canvas as a preset',
-        tipPresets: 'Load a saved preset', tipModel: 'Reasoning effort (default = the model\'s defaultEffort)',
+        tipUndo: 'Undo the last structural change', tipSave: 'Save this canvas as a preset (reusable in new chats)',
+        tipPresets: 'Save this canvas for new chats, or load a preset / starter template', tipModel: 'Reasoning effort (default = the model\'s defaultEffort)',
         tipMemory: 'Memory: reuse this node\'s previous session (persisted across runs and restarts)',
         memLatest: 'Latest',
         memLatestOpt: 'Auto (latest)',
@@ -443,16 +481,22 @@ window.__ModuleLoader__.load({
       helpBody: { fontSize: '11px', lineHeight: '17px', color: C.dim },
       helpLine: { whiteSpace: 'pre-wrap' },
       presetBar: {
-        marginLeft: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'flex-end',
-        gap: '3px', position: 'relative', flex: '0 0 auto',
+        marginLeft: 'auto', display: 'flex', alignItems: 'center',
+        gap: '6px', position: 'relative', flex: '0 0 auto',
       },
       presetRowTop: { display: 'flex', alignItems: 'center', gap: '5px' },
       presetMenu: {
-        position: 'absolute', right: 0, top: '100%', marginTop: '4px', minWidth: '190px',
-        maxHeight: '260px', overflowY: 'auto', background: C.elevated,
-        border: '1px solid ' + C.border, borderRadius: '6px', zIndex: 60, padding: '4px',
+        position: 'absolute', right: 0, top: '100%', marginTop: '4px', minWidth: '236px',
+        maxHeight: '320px', overflowY: 'auto', background: C.elevated,
+        border: '1px solid ' + C.border, borderRadius: '6px', zIndex: 60, padding: '6px',
         boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
       },
+      presetSaveBox: {
+        padding: '2px 2px 8px', marginBottom: '6px',
+        borderBottom: '1px solid ' + C.border,
+      },
+      presetSaveTitle: { fontSize: '10px', color: C.dim, marginBottom: '5px' },
+      presetSaveRow: { display: 'flex', alignItems: 'center', gap: '5px' },
       presetRow: {
         display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 6px',
         borderRadius: '4px', fontSize: '11px', cursor: 'pointer',
@@ -463,7 +507,7 @@ window.__ModuleLoader__.load({
         background: 'transparent', color: '#e5534b', fontSize: '11px', cursor: 'pointer',
       },
       presetInput: {
-        width: '92px', padding: '3px 6px', borderRadius: '5px', border: '1px solid ' + C.border,
+        flex: '1 1 auto', minWidth: '0', padding: '4px 7px', borderRadius: '5px', border: '1px solid ' + C.border,
         background: C.base, color: C.text, fontSize: '11px', outline: 'none', userSelect: 'text',
       },
       presetEmpty: { padding: '6px', fontSize: '10px', color: C.dim },
@@ -507,20 +551,20 @@ window.__ModuleLoader__.load({
         borderRadius: '10px 10px 0 0', zIndex: 2, pointerEvents: 'none',
       },
       statusChip: {
-        position: 'absolute', right: '12px', bottom: '4px', fontSize: '10px', lineHeight: '14px',
-        padding: '1px 5px', borderRadius: '999px',
+        position: 'absolute', left: '10px', bottom: '5px', fontSize: '10px', lineHeight: '14px',
+        padding: '1px 6px', borderRadius: '999px',
         color: C.dim, pointerEvents: 'none', zIndex: 3, whiteSpace: 'nowrap',
         display: 'inline-flex', alignItems: 'center', gap: '3px',
       },
       warnChip: {
-        position: 'absolute', left: '12px', bottom: '4px', fontSize: '9px', lineHeight: '13px',
-        padding: '1px 5px', borderRadius: '999px',
+        position: 'absolute', left: '10px', bottom: '5px', fontSize: '9px', lineHeight: '13px',
+        padding: '1px 6px', borderRadius: '999px',
         color: '#d29922', background: 'rgba(210,153,34,0.14)', border: '1px solid rgba(210,153,34,0.55)',
         pointerEvents: 'auto', zIndex: 5, whiteSpace: 'nowrap',
         display: 'inline-flex', alignItems: 'center', gap: '2px',
       },
       statusBtn: {
-        position: 'absolute', right: '12px', bottom: '3px', fontSize: '10px', lineHeight: '14px',
+        position: 'absolute', left: '10px', bottom: '4px', fontSize: '10px', lineHeight: '14px',
         padding: '1px 6px', borderRadius: '999px', border: '1px solid ' + C.border,
         background: C.elevated, color: C.text, cursor: 'pointer', pointerEvents: 'auto',
         zIndex: 7, whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: '3px',
@@ -571,22 +615,71 @@ window.__ModuleLoader__.load({
         outline: 'none', userSelect: 'text',
       },
       rolePopover: {
-        position: 'absolute', left: '100%', top: '0', marginLeft: '8px', width: '230px',
+        position: 'absolute', left: '100%', top: '0', marginLeft: '8px', width: '280px',
         background: C.elevated, border: '1px solid ' + C.border, borderRadius: '8px',
         boxShadow: '0 10px 26px rgba(0,0,0,0.45)', padding: '8px', zIndex: 70,
       },
       roleArea: {
-        width: '100%', height: '96px', boxSizing: 'border-box', resize: 'none',
-        background: C.base, color: C.text, fontSize: '11px', lineHeight: '15px',
-        border: '1px solid ' + C.border, borderRadius: '5px', padding: '5px 6px',
+        width: '100%', height: '150px', boxSizing: 'border-box', resize: 'vertical',
+        background: C.base, color: C.text, fontSize: '11px', lineHeight: '16px',
+        border: '1px solid ' + C.border, borderRadius: '5px', padding: '6px 7px',
         outline: 'none', userSelect: 'text',
       },
-      leadLabel: { position: 'absolute', left: '10px', right: '10px', top: '34px', height: '16px', display: 'flex', alignItems: 'center' },
+      leadLabel: {
+        position: 'absolute', left: '10px', right: '10px', top: '34px', height: '16px',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+      },
       task: {
         position: 'absolute', left: '10px', right: '10px', top: '51px', height: '116px',
         padding: '4px 6px', borderRadius: '5px', border: '1px solid ' + C.border,
         background: C.base, color: C.text, fontSize: '11px', resize: 'none', outline: 'none',
         lineHeight: '14px', boxSizing: 'border-box', userSelect: 'text',
+      },
+      condLabelRow: {
+        position: 'absolute', left: '10px', right: '10px', top: '103px', height: '16px',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '4px',
+      },
+      condBtnGroup: { display: 'inline-flex', alignItems: 'center', gap: '4px' },
+      condAddBtn: {
+        padding: '0 5px', height: '16px', borderRadius: '4px',
+        border: '1px solid ' + C.border, background: C.base, color: C.dim,
+        fontSize: '9px', lineHeight: '14px', cursor: 'pointer', outline: 'none',
+      },
+      condModeBtnOn: {
+        padding: '0 5px', height: '16px', borderRadius: '4px',
+        border: '1px solid ' + C.accent, background: C.hover, color: C.accent,
+        fontSize: '9px', lineHeight: '14px', cursor: 'pointer', outline: 'none',
+      },
+      condArea: {
+        position: 'absolute', left: '10px', right: '10px', top: '121px', height: '46px',
+        padding: '4px 6px', borderRadius: '5px', border: '1px solid ' + C.border,
+        background: C.base, color: C.text, fontSize: '11px', resize: 'none', outline: 'none',
+        lineHeight: '14px', boxSizing: 'border-box', userSelect: 'text',
+      },
+      condBranchRow: {
+        position: 'relative', height: COND_ROW_H + 'px',
+        display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
+      },
+      condBranchInput: {
+        width: '108px', height: '16px', boxSizing: 'border-box',
+        padding: '0 4px', borderRadius: '3px',
+        border: '1px solid ' + C.border, background: C.base, color: C.text,
+        fontSize: '10px', lineHeight: '14px', textAlign: 'right',
+        outline: 'none', userSelect: 'text',
+      },
+      condBranchExpand: {
+        width: '15px', height: '16px', padding: 0, marginRight: '2px',
+        border: '1px solid ' + C.border, borderRadius: '3px',
+        background: C.base, color: C.dim,
+        fontSize: '9px', lineHeight: '14px', cursor: 'pointer', flex: '0 0 auto',
+      },
+      condBranchDel: {
+        width: '14px', height: '16px', padding: 0, marginLeft: '2px',
+        border: 'none', background: 'transparent', color: C.dim,
+        fontSize: '11px', lineHeight: '14px', cursor: 'pointer', flex: '0 0 auto',
+      },
+      condBranchDelSpacer: {
+        width: '14px', height: '16px', marginLeft: '2px', flex: '0 0 auto',
       },
 
       selectBtn: {
@@ -648,6 +741,61 @@ window.__ModuleLoader__.load({
       return SOCKET_BAND_TOP + i * ROW_H + ROW_H / 2;
     }
 
+    function isCustomBranches(node) {
+      return Boolean(node && node.kind === 'condition' && Array.isArray(node.branches) && node.branches.length >= 2);
+    }
+
+    function conditionBranchesForUI(node, lang) {
+      if (isCustomBranches(node)) {
+        return node.branches.slice(0, 16).map((item, idx) => {
+          const id = typeof item === 'string'
+            ? (item.trim() || ('case_' + (idx + 1)))
+            : (String((item && (item.id || item.label)) || ('case_' + (idx + 1))).trim());
+          const label = typeof item === 'string'
+            ? (item.trim() || (lang === 'en' ? 'Case ' + (idx + 1) : '分支 ' + (idx + 1)))
+            : (item && item.label !== undefined ? String(item.label) : String((item && item.id) || ''));
+          return { id, label, color: BRANCH_COLORS[idx % BRANCH_COLORS.length], custom: true };
+        });
+      }
+      return [
+        { id: 'true', label: lang === 'en' ? 'Yes' : '是', color: '#3fb950', custom: false },
+        { id: 'false', label: lang === 'en' ? 'No' : '否', color: '#e5534b', custom: false },
+      ];
+    }
+
+    function nodeHeight(node) {
+      if (node && node.kind === 'condition') {
+        const count = isCustomBranches(node) ? Math.min(16, node.branches.length) : 2;
+        return Math.max(NODE_H, SOCKET_BAND_TOP + count * COND_ROW_H + 24);
+      }
+      return NODE_H;
+    }
+
+    function outputSocketY(fromNode, type, branch) {
+      const b = typeof branch === 'string' ? branch.trim() : '';
+      if (b || (fromNode && fromNode.kind === 'condition')) {
+        const list = conditionBranchesForUI(fromNode);
+        const idx = b ? Math.max(0, list.findIndex((x) => x.id === b)) : 0;
+        return SOCKET_BAND_TOP + idx * COND_ROW_H + COND_ROW_H / 2;
+      }
+      const idx = Math.max(0, SOCKET_TYPES.findIndex((t) => t.id === (type || 'prompt')));
+      return socketCenterY(idx);
+    }
+
+    function edgeColorFor(fromNode, edge) {
+      const b = edge && typeof edge.branch === 'string' ? edge.branch.trim() : '';
+      if (b) {
+        if (fromNode && fromNode.kind === 'condition') {
+          const hit = conditionBranchesForUI(fromNode).find((x) => x.id === b);
+          if (hit) return hit.color;
+        }
+        if (b === 'true') return '#3fb950';
+        if (b === 'false') return '#e5534b';
+        return '#2f81f7';
+      }
+      return (SOCKET_TYPES.find((sock) => sock.id === (edge && edge.type)) || SOCKET_TYPES[0]).color;
+    }
+
     function defaultNodes() {
       return [
         { id: 'lead', kind: 'lead', x: 40, y: 80, label: 'Lead', task: '', provider: '', model: '', role: '' },
@@ -687,24 +835,26 @@ window.__ModuleLoader__.load({
       return doc;
     }
 
-    /** Control points of one link, in canvas coordinates. */
-    function edgeCurve(from, to, type) {
-      const idx = Math.max(0, SOCKET_TYPES.findIndex((t) => t.id === type));
-      const y = socketCenterY(idx);
-      const x1 = from.x + WORLD_PAD + NODE_W, y1 = from.y + WORLD_PAD + y;
-      const x2 = to.x + WORLD_PAD, y2 = to.y + WORLD_PAD + y;
+    /** Control points of one link, in canvas coordinates. All inputs converge to the unified left socket (Row 0). */
+    function edgeCurve(from, to, typeOrEdge) {
+      const type = (typeOrEdge && typeof typeOrEdge === 'object') ? (typeOrEdge.type || 'prompt') : (typeOrEdge || 'prompt');
+      const branch = (typeOrEdge && typeof typeOrEdge === 'object') ? (typeOrEdge.branch || '') : '';
+      const x1 = from.x + WORLD_PAD + NODE_W;
+      const y1 = from.y + WORLD_PAD + outputSocketY(from, type, branch);
+      const x2 = to.x + WORLD_PAD;
+      const y2 = to.y + WORLD_PAD + socketCenterY(0);
       const dx = Math.max(40, Math.abs(x2 - x1) * 0.5);
       return { x1, y1, c1x: x1 + dx, c1y: y1, c2x: x2 - dx, c2y: y2, x2, y2 };
     }
 
-    function edgePath(from, to, type) {
-      const c = edgeCurve(from, to, type);
+    function edgePath(from, to, typeOrEdge) {
+      const c = edgeCurve(from, to, typeOrEdge);
       return 'M ' + c.x1 + ' ' + c.y1 + ' C ' + c.c1x + ' ' + c.c1y + ', ' + c.c2x + ' ' + c.c2y + ', ' + c.x2 + ' ' + c.y2;
     }
 
     /** Shortest distance between a point and one link, sampled along the curve. */
-    function distanceToEdge(point, from, to, type) {
-      const c = edgeCurve(from, to, type);
+    function distanceToEdge(point, from, to, typeOrEdge) {
+      const c = edgeCurve(from, to, typeOrEdge);
       let best = Infinity;
       let prevX = c.x1;
       let prevY = c.y1;
@@ -1028,6 +1178,63 @@ window.__ModuleLoader__.load({
         { id: 'a5', from: 'n_pick', to: 'n_exec', type: 'prompt' },
         { id: 'a6', from: 'n_exec', to: 'n_review', type: 'prompt' },
       ];
+      const condNodes = [
+        {
+          id: 'lead', kind: 'lead', label: 'Lead', y: 0,
+          task: en
+            ? 'Run project tests and checks, then route automatically: if everything passes, draft release notes; if anything fails, diagnose root causes and propose a fix patch before final review.'
+            : '先运行项目测试与构建自检，再根据结果自动分流：全部通过则整理发布说明；存在失败则定位根因并给出修复方案，最后由我终审。',
+          provider: '', model: '', role: '',
+        },
+        {
+          id: 'c_run', kind: 'agent', y: 0,
+          label: en ? 'Run & Verify' : '执行与自检',
+          provider: '', model: '', reasoning: '', preset: 'standard', keepSession: false,
+          role: en
+            ? 'Run tests/checks and report exact pass/fail status, error logs, and affected files.'
+            : '执行测试或验证命令，如实汇报通过/失败状态、报错日志与受影响文件。',
+        },
+        {
+          id: 'c_gate', kind: 'condition', y: 0,
+          label: en ? 'Checks Passed?' : '是否通过？',
+          provider: '', model: '', reasoning: '', preset: 'minimal', keepSession: false,
+          role: en
+            ? 'Return pass=true if upstream tests/checks all passed with no errors; return pass=false on any failure or incomplete delivery.'
+            : '判断上游执行与自检是否全部通过且无报错；全部通过返回 true，存在失败或未完全交付返回 false。',
+        },
+        {
+          id: 'c_yes', kind: 'agent', y: 0,
+          label: en ? 'Pass: Draft Release' : '通过：整理交付',
+          provider: '', model: '', reasoning: '', preset: 'minimal', keepSession: false,
+          role: en
+            ? 'Summarize verified changes and draft concise release notes ready to ship.'
+            : '汇总已验证的改动内容，起草简洁清晰的发布说明与交付清单。',
+        },
+        {
+          id: 'c_no', kind: 'agent', y: 100,
+          label: en ? 'Fail: Diagnose & Fix' : '失败：定位修复',
+          provider: '', model: '', reasoning: '', preset: 'standard', keepSession: false,
+          role: en
+            ? 'Inspect the failure logs, identify root causes, and implement or propose a targeted fix.'
+            : '排查失败日志、定位根因，并完成或给出最小范围的修复补丁。',
+        },
+        {
+          id: 'c_final', kind: 'lead', y: 0,
+          label: en ? 'Lead Final Review' : 'Lead 终审',
+          provider: '', model: '',
+          role: en
+            ? 'Review the chosen branch outcome and decide whether to ship or re-run.'
+            : '查看命中的分支产出，确认可直接交付或安排下一轮修复。',
+        },
+      ];
+      const condEdges = [
+        { id: 'cd1', from: 'lead', to: 'c_run', type: 'prompt' },
+        { id: 'cd2', from: 'c_run', to: 'c_gate', type: 'prompt' },
+        { id: 'cd3', from: 'c_gate', to: 'c_yes', type: 'prompt', branch: 'true' },
+        { id: 'cd4', from: 'c_gate', to: 'c_no', type: 'prompt', branch: 'false' },
+        { id: 'cd5', from: 'c_yes', to: 'c_final', type: 'prompt' },
+        { id: 'cd6', from: 'c_no', to: 'c_final', type: 'prompt' },
+      ];
       return [
         {
           id: 'tpl-swe',
@@ -1046,6 +1253,12 @@ window.__ModuleLoader__.load({
           name: en ? 'Parallel Options → Decide → Execute → Review' : '并行方案对比 → 拍板 → 执行 → 验收',
           nodes: layoutGraph(abNodes, abEdges),
           edges: abEdges,
+        },
+        {
+          id: 'tpl-cond',
+          name: en ? 'Conditional: Run → Pass/Fail Branch → Review' : '条件分支：执行 → 判断分流 → 终审',
+          nodes: layoutGraph(condNodes, condEdges),
+          edges: condEdges,
         },
       ];
     }
@@ -1073,7 +1286,12 @@ window.__ModuleLoader__.load({
       const activeIds = new Set(active.map((n) => n.id));
       const planEdges = edges
         .filter((e) => (e.from === 'lead' || activeIds.has(e.from)) && activeIds.has(e.to))
-        .map((e) => ({ from: e.from, to: e.to, type: e.type || 'prompt' }));
+        .map((e) => {
+          const item = { from: e.from, to: e.to, type: e.type || 'prompt' };
+          const b = typeof e.branch === 'string' ? e.branch.trim() : '';
+          if (b) item.branch = b;
+          return item;
+        });
 
       const maxParallel = opts && Number.isFinite(Number(opts.maxParallel))
         ? Math.max(1, Math.min(8, Math.floor(Number(opts.maxParallel))))
@@ -1084,22 +1302,31 @@ window.__ModuleLoader__.load({
           task,
           maxParallel,
           skipped: skipped.map((n) => n.label || n.id),
-          nodes: active.map((n) => ({
-            id: n.id,
-            kind: n.kind === 'lead' ? 'lead' : 'agent',
-            label: n.label || n.id,
-            role: n.role || '',
-            provider: n.provider || '',
-            model: n.model || '',
-            reasoning: n.reasoning || '',
-            preset: n.preset === 'minimal' ? 'minimal' : 'standard',
-            keepSession: Boolean(n.keepSession),
-            memoryChildId: n.memoryChildId || '',
-            // A structured link is the only thing that decides this: no separate switch.
-            structured: planEdges.some((e) => e.from === n.id && e.type === 'structured'),
-            fallbackModel: n.fallbackModel || '',
-            fallbackProvider: n.fallbackProvider || '',
-          })),
+          nodes: active.map((n) => {
+            const out = {
+              id: n.id,
+              kind: n.kind === 'lead' ? 'lead' : (n.kind === 'condition' ? 'condition' : 'agent'),
+              label: n.label || n.id,
+              role: n.role || '',
+              provider: n.provider || '',
+              model: n.model || '',
+              reasoning: n.reasoning || '',
+              preset: n.kind === 'condition' ? 'minimal' : (n.preset === 'minimal' ? 'minimal' : 'standard'),
+              keepSession: n.kind === 'condition' ? false : Boolean(n.keepSession),
+              memoryChildId: n.kind === 'condition' ? '' : (n.memoryChildId || ''),
+              // A structured link is the only thing that decides this: no separate switch.
+              structured: planEdges.some((e) => e.from === n.id && e.type === 'structured'),
+              fallbackModel: n.fallbackModel || '',
+              fallbackProvider: n.fallbackProvider || '',
+            };
+            if (out.kind === 'condition' && isCustomBranches(n)) {
+              out.branches = conditionBranchesForUI(n).map((b) => ({ id: b.id, label: b.label }));
+            }
+            if (out.kind === 'condition' && n.multiMatch) {
+              out.multiMatch = true;
+            }
+            return out;
+          }),
           edges: planEdges,
         },
       };
@@ -1159,6 +1386,16 @@ window.__ModuleLoader__.load({
     function nextMaxParallel(cur) {
       const idx = PARALLEL_STEPS.indexOf(Number(cur));
       return PARALLEL_STEPS[(idx + 1) % PARALLEL_STEPS.length];
+    }
+
+    /** Pick 'left' or 'right' anchor so a wrapped toolbar dropdown never clips off the pane edge. */
+    function dropdownAlign(btnRect, containerRect, menuWidth) {
+      if (!btnRect || !containerRect) return 'right';
+      const need = Number(menuWidth) || 200;
+      const availLeft = btnRect.right - containerRect.left;
+      const availRight = containerRect.right - btnRect.left;
+      if (availLeft < need && availRight >= availLeft) return 'left';
+      return 'right';
     }
 
     /** Compute the next `{ k, x, y }` keeping the content point under `(mx, my)` fixed. */
@@ -1288,6 +1525,8 @@ window.__ModuleLoader__.load({
       const [syncNote, setSyncNote] = useState('');
       const [roleEditFor, setRoleEditFor] = useState(null);
       const [menuOpen, setMenuOpen] = useState(false);
+      const [menuAlign, setMenuAlign] = useState('right');
+      const [presetAlign, setPresetAlign] = useState('right');
       const [helpOpen, setHelpOpen] = useState(false);
       const [cutMode, setCutMode] = useState(loadCutMode);
       const [fxLevel, setFxLevel] = useState(loadEffectLevel);
@@ -1737,7 +1976,8 @@ window.__ModuleLoader__.load({
           if (n.x < minX) minX = n.x;
           if (n.y < minY) minY = n.y;
           if (n.x + NODE_W > maxX) maxX = n.x + NODE_W;
-          if (n.y + NODE_H > maxY) maxY = n.y + NODE_H;
+          const nh = nodeHeight(n);
+          if (n.y + nh > maxY) maxY = n.y + nh;
         }
         if (!Number.isFinite(minX)) return;
         const cw = el.clientWidth || 1;
@@ -1835,14 +2075,19 @@ window.__ModuleLoader__.load({
           const y = atWorld && typeof atWorld.y === 'number'
             ? Math.round(atWorld.y - NODE_H / 2)
             : center.y - NODE_H / 2 + (ns.length % 3) * 40;
+          const normKind = kind === 'lead' ? 'lead' : (kind === 'condition' ? 'condition' : 'agent');
+          const defaultLabel = normKind === 'lead'
+            ? 'Lead 步骤 ' + i
+            : (normKind === 'condition' ? (lang === 'en' ? 'Condition ' + i : '条件判断 ' + i) : 'Node ' + i);
           return [...ns, {
             id: newId,
-            kind: kind === 'lead' ? 'lead' : 'agent',
+            kind: normKind,
             x,
             y,
-            label: kind === 'lead' ? 'Lead 步骤 ' + i : 'Node ' + i,
+            label: defaultLabel,
             provider: '',
             model: '',
+            preset: normKind === 'condition' ? 'minimal' : 'standard',
             role: '',
           }];
         });
@@ -2007,23 +2252,65 @@ window.__ModuleLoader__.load({
         e.stopPropagation();
       };
 
-      const onOutputDown = (e, id, type) => {
+      const addConditionBranch = (node) => {
+        const current = isCustomBranches(node)
+          ? conditionBranchesForUI(node, lang).map((b) => ({ id: b.id, label: b.label }))
+          : [
+              { id: 'true', label: lang === 'en' ? 'Yes' : '是' },
+              { id: 'false', label: lang === 'en' ? 'No' : '否' },
+            ];
+        if (current.length >= 16) return;
+        pushSnapshot();
+        const used = new Set(current.map((b) => b.id));
+        let n = current.length + 1;
+        while (used.has('case_' + n)) n += 1;
+        const next = current.concat([{
+          id: 'case_' + n,
+          label: lang === 'en' ? 'Case ' + n : '分支 ' + n,
+        }]);
+        updateNode(node.id, { branches: next });
+      };
+
+      const renameConditionBranch = (node, branchId, nextLabel) => {
+        const current = isCustomBranches(node)
+          ? conditionBranchesForUI(node, lang).map((b) => ({ id: b.id, label: b.label }))
+          : [
+              { id: 'true', label: lang === 'en' ? 'Yes' : '是' },
+              { id: 'false', label: lang === 'en' ? 'No' : '否' },
+            ];
+        const next = current.map((b) => (b.id === branchId ? { ...b, label: nextLabel } : b));
+        updateNode(node.id, { branches: next });
+      };
+
+      const removeConditionBranch = (node, branchId) => {
+        if (!isCustomBranches(node)) return;
+        const current = conditionBranchesForUI(node, lang).map((b) => ({ id: b.id, label: b.label }));
+        if (current.length <= 2) return;
+        pushSnapshot();
+        const next = current.filter((b) => b.id !== branchId);
+        updateNode(node.id, { branches: next });
+        setEdges((es) => es.filter((e) => !(e.from === node.id && e.branch === branchId)));
+      };
+
+      const onOutputDown = (e, id, type, branch) => {
         const node = nodes.find((n) => n.id === id);
         if (!node) return;
-        const idx = SOCKET_TYPES.findIndex((t) => t.id === type);
+        const b = typeof branch === 'string' ? branch.trim() : '';
         const sx = node.x + NODE_W;
-        const sy = node.y + socketCenterY(idx);
-        setPending({ dir: 'out', fromId: id, type, sx, sy, x: sx, y: sy });
+        const sy = node.y + outputSocketY(node, type, b);
+        const color = edgeColorFor(node, { type, branch: b });
+        setPending({ dir: 'out', fromId: id, type, branch: b, color, sx, sy, x: sx, y: sy });
         setDragging(true);
         e.preventDefault();
         e.stopPropagation();
       };
 
-      /** Release over an output socket: completes a drag that started at an input. */
-      const onOutputUp = (e, id, type) => {
-        if (!pending || pending.dir !== 'in' || pending.type !== type) return;
+      /** Release over an output socket: completes a drag that started at the unified left input. */
+      const onOutputUp = (e, id, type, branch) => {
+        if (!pending || pending.dir !== 'in') return;
         e.preventDefault();
         e.stopPropagation();
+        const b = typeof branch === 'string' ? branch.trim() : '';
         const toId = pending.toId;
         if (toId && toId !== id) {
           if (wouldCycle(nodesRef.current, edgesRef.current, id, toId)) {
@@ -2031,8 +2318,10 @@ window.__ModuleLoader__.load({
           } else {
             pushSnapshot();
             setEdges((es) => {
-              if (es.some((x) => x.from === id && x.to === toId && x.type === type)) return es;
-              return [...es, { id: 'e' + Date.now().toString(36), from: id, to: toId, type }];
+              if (es.some((x) => x.from === id && x.to === toId && x.type === type && (x.branch || '') === b)) return es;
+              const nextEdge = { id: 'e' + Date.now().toString(36), from: id, to: toId, type };
+              if (b) nextEdge.branch = b;
+              return [...es, nextEdge];
             });
           }
         }
@@ -2040,45 +2329,52 @@ window.__ModuleLoader__.load({
         setDragging(false);
       };
 
-      // Dragging a connected input detaches it; dragging a free input starts a
-      // link that finishes on an output socket of the same type.
-      const onInputDown = (e, id, type) => {
+      // Unified left input: dragging a connected input detaches the latest wire;
+      // dragging a free input starts a reverse wire that adopts whichever right output it drops onto.
+      const onInputDown = (e, id) => {
         e.preventDefault();
         e.stopPropagation();
-        const link = edges.find((x) => x.to === id && x.type === type);
-        const idx = SOCKET_TYPES.findIndex((t) => t.id === type);
+        const incoming = edges.filter((x) => x.to === id);
+        const link = incoming[incoming.length - 1];
         if (!link) {
           const node = nodes.find((n) => n.id === id);
           if (!node) return;
           const sx = node.x;
-          const sy = node.y + socketCenterY(idx);
-          setPending({ dir: 'in', toId: id, type, sx, sy, x: sx, y: sy });
+          const sy = node.y + socketCenterY(0);
+          setPending({ dir: 'in', toId: id, type: 'prompt', branch: '', color: '#8a8f98', sx, sy, x: sx, y: sy });
           setDragging(true);
           return;
         }
         pushSnapshot();
-        setEdges((es) => es.filter((x) => !(x.to === id && x.type === type)));
+        setEdges((es) => es.filter((x) => x.id !== link.id));
         const from = nodes.find((n) => n.id === link.from);
         if (!from) return;
+        const b = typeof link.branch === 'string' ? link.branch.trim() : '';
+        const linkType = link.type || 'prompt';
         const sx = from.x + NODE_W;
-        const sy = from.y + socketCenterY(idx);
-        setPending({ dir: 'out', fromId: link.from, type, sx, sy, x: sx, y: sy });
+        const sy = from.y + outputSocketY(from, linkType, b);
+        const color = edgeColorFor(from, link);
+        setPending({ dir: 'out', fromId: link.from, type: linkType, branch: b, color, sx, sy, x: sx, y: sy });
         setDragging(true);
       };
 
-      const onInputUp = (e, id, type) => {
-        if (!pending || pending.dir !== 'out' || pending.type !== type) return;
+      const onInputUp = (e, id) => {
+        if (!pending || pending.dir !== 'out') return;
         e.preventDefault();
         e.stopPropagation();
         if (pending.fromId !== id) {
           const fromId = pending.fromId;
+          const type = pending.type || 'prompt';
+          const b = typeof pending.branch === 'string' ? pending.branch.trim() : '';
           if (wouldCycle(nodesRef.current, edgesRef.current, fromId, id)) {
             flash(t('cycleBlocked'));
           } else {
             pushSnapshot();
             setEdges((es) => {
-              if (es.some((x) => x.from === fromId && x.to === id && x.type === type)) return es;
-              return [...es, { id: 'e' + Date.now().toString(36), from: fromId, to: id, type }];
+              if (es.some((x) => x.from === fromId && x.to === id && x.type === type && (x.branch || '') === b)) return es;
+              const nextEdge = { id: 'e' + Date.now().toString(36), from: fromId, to: id, type };
+              if (b) nextEdge.branch = b;
+              return [...es, nextEdge];
             });
           }
         }
@@ -2180,6 +2476,11 @@ window.__ModuleLoader__.load({
             if (ev.key === '2') {
               ev.preventDefault();
               act.addNode('lead', { x: act.addMenu.wx, y: act.addMenu.wy });
+              return;
+            }
+            if (ev.key === '3') {
+              ev.preventDefault();
+              act.addNode('condition', { x: act.addMenu.wx, y: act.addMenu.wy });
               return;
             }
           }
@@ -2314,7 +2615,7 @@ window.__ModuleLoader__.load({
               const source = nodeMap.get(edge.from);
               const target = nodeMap.get(edge.to);
               if (!source || !target) continue;
-              if (distanceToEdge(canvasSpot, source, target, edge.type) <= threshold) {
+              if (distanceToEdge(canvasSpot, source, target, edge) <= threshold) {
                 cutHits.current.add(edge.id);
               }
             }
@@ -2372,7 +2673,6 @@ window.__ModuleLoader__.load({
         if (!savePresets(next)) { flash(t('saveFailed')); return; }
         setPresets(next);
         setPresetName('');
-        setPresetOpen(null);
         flash(t('savedPreset') + ': ' + name);
       };
 
@@ -2427,21 +2727,28 @@ window.__ModuleLoader__.load({
           return kept.concat(incoming);
         });
         setEdges((existing) => {
-          const incoming = rawIncomingEdges.map((e, i) => ({
-            id: e.id || 'e' + i + '-' + Math.random().toString(36).slice(2, 6),
-            from: e.from,
-            to: e.to,
-            type: e.type || 'prompt',
-          }));
+          const incoming = rawIncomingEdges.map((e, i) => {
+            const item = {
+              id: e.id || 'e' + i + '-' + Math.random().toString(36).slice(2, 6),
+              from: e.from,
+              to: e.to,
+              type: e.type || 'prompt',
+            };
+            const b = typeof e.branch === 'string' ? e.branch.trim() : '';
+            if (b) item.branch = b;
+            return item;
+          });
           if (!merge) return incoming;
           const rawDrops = Array.isArray(doc.removeEdges) ? doc.removeEdges : [];
           const matchesDrop = (e) => rawDrops.some((r) => r
             && String(r.from) === e.from
             && String(r.to) === e.to
-            && (!r.type || r.type === e.type));
+            && (!r.type || r.type === e.type)
+            && (!r.branch || r.branch === e.branch));
           const kept = existing.filter((e) => !matchesDrop(e) && !removedNodes.has(e.from) && !removedNodes.has(e.to));
-          const seen = new Set(kept.map((e) => e.from + '>' + e.to + '|' + e.type));
-          const added = incoming.filter((e) => !removedNodes.has(e.from) && !removedNodes.has(e.to) && !seen.has(e.from + '>' + e.to + '|' + e.type));
+          const keyOf = (e) => e.from + '>' + e.to + '|' + e.type + '|' + (e.branch || '');
+          const seen = new Set(kept.map(keyOf));
+          const added = incoming.filter((e) => !removedNodes.has(e.from) && !removedNodes.has(e.to) && !seen.has(keyOf(e)));
           return kept.concat(added);
         });
         setSelectedIds([]);
@@ -2679,9 +2986,9 @@ window.__ModuleLoader__.load({
       const memoryToggle = (node) => {
         const runInfo = runsById[node.id];
         const history = (runInfo && Array.isArray(runInfo.history)) ? runInfo.history : [];
-        const showPicker = Boolean(node.keepSession);
+        const isOn = Boolean(node.keepSession);
         const key = 'm:' + node.id;
-        const isOpen = openModelFor === key;
+        const isOpen = isOn && openModelFor === key;
         const pickedItem = node.memoryChildId
           ? history.find((item) => item.childId === node.memoryChildId)
           : undefined;
@@ -2689,15 +2996,15 @@ window.__ModuleLoader__.load({
           ? t('memLatest')
           : (pickedItem ? ('#' + pickedItem.index) : String(node.memoryChildId).slice(-6));
         const toggleBtn = h('button', {
-          style: showPicker
-            ? { ...(node.keepSession ? S.toggleSwitchOn : S.toggleSwitch), flex: '0 0 34px', width: '34px' }
-            : (node.keepSession ? S.toggleSwitchOn : S.toggleSwitch),
+          style: isOn ? S.toggleSwitchOn : S.toggleSwitch,
           type: 'button',
           title: t('tipMemory'),
           onMouseDown: (e) => e.stopPropagation(),
-          onClick: () => updateNode(node.id, { keepSession: !node.keepSession }),
-        }, node.keepSession ? t('on') : t('off'));
-        if (!showPicker) return toggleBtn;
+          onClick: () => {
+            if (isOn && openModelFor === key) setOpenModelFor(null);
+            updateNode(node.id, { keepSession: !isOn });
+          },
+        }, isOn ? t('on') : t('off'));
         const rows = [
           h('div', {
             key: 'latest',
@@ -2721,18 +3028,24 @@ window.__ModuleLoader__.load({
         ];
         return h('div', { style: { display: 'flex', alignItems: 'center', gap: '4px', flex: '1 1 auto', minWidth: 0 } },
           toggleBtn,
-          h('div', { ref: isOpen ? dropdownRef : undefined, style: { position: 'relative', flex: '1 1 auto', minWidth: 0 } },
+          h('div', { ref: isOpen ? dropdownRef : undefined, style: { position: 'relative', flex: '0 0 64px', width: '64px' } },
             h('button', {
-              style: S.selectBtn,
+              style: isOn
+                ? { ...S.selectBtn, borderColor: C.accent }
+                : { ...S.selectBtn, borderColor: C.border, color: C.dim, opacity: 0.55, cursor: 'not-allowed' },
               type: 'button',
+              disabled: !isOn,
               title: t('tipMemoryPick'),
               onMouseDown: (e) => e.stopPropagation(),
-              onClick: () => setOpenModelFor(isOpen ? null : key),
+              onClick: () => { if (isOn) setOpenModelFor(isOpen ? null : key); },
             },
               h('span', { style: S.selectText }, pickLabel),
               h('span', { style: S.caret }, '▾'),
             ),
-            isOpen && h('div', { style: S.menu, onMouseDown: (e) => e.stopPropagation() }, rows),
+            isOpen && h('div', {
+              style: { ...S.menu, left: 'auto', right: 0, minWidth: '150px' },
+              onMouseDown: (e) => e.stopPropagation(),
+            }, rows),
           ),
         );
       };
@@ -2818,15 +3131,24 @@ window.__ModuleLoader__.load({
 
       const fxName = (level) => (level === 'minimal' ? t('fxMinimal') : (level === 'vivid' ? t('fxVivid') : t('fxStandard')));
       const selectedSet = new Set(selectedIds);
-      const connectedIn = new Set();
+      const nodeById = new Map(nodes.map((n) => [n.id, n]));
+      const inColorByNode = new Map();
+      const inCountByNode = new Map();
+      const inPriority = (e) => (e.type === 'session-ref' ? 3 : (e.type === 'structured' ? 2 : (e.branch ? 1.5 : 1)));
+      const inPrioByNode = new Map();
       const connectedOut = new Set();
       for (const e of edges) {
         const type = e.type || 'prompt';
-        connectedOut.add(e.from + '|' + type);
-        connectedIn.add(e.to + '|' + type);
+        const b = typeof e.branch === 'string' ? e.branch.trim() : '';
+        connectedOut.add(e.from + '|' + (b ? 'branch:' + b : type));
+        inCountByNode.set(e.to, (inCountByNode.get(e.to) || 0) + 1);
+        const prio = inPriority(e);
+        if (!inPrioByNode.has(e.to) || prio >= inPrioByNode.get(e.to)) {
+          inPrioByNode.set(e.to, prio);
+          inColorByNode.set(e.to, edgeColorFor(nodeById.get(e.from), e));
+        }
       }
       const reachableIds = reachableFrom(nodes, edges);
-      const nodeById = new Map(nodes.map((n) => [n.id, n]));
       const soloLeadIds = soloLeadNodeIds(nodes, edges);
       const deadEndIds = deadEndNodeIds(nodes, edges);
 
@@ -2838,6 +3160,7 @@ window.__ModuleLoader__.load({
       //   settles to "Done" once the turn ends.
       const leadReadyIds = new Set();
       const leadDoneIds = new Set();
+      const hasCondNode = nodes.some((x) => x.kind === 'condition');
       if (enabled) {
         for (const n of nodes) {
           if (n.kind !== 'lead' || n.id === 'lead' || !reachableIds.has(n.id)) continue;
@@ -2847,7 +3170,10 @@ window.__ModuleLoader__.load({
           if (!upIds.length) continue;
           const upAgents = upIds.filter((id) => nodeById.get(id).kind !== 'lead');
           if (!upAgents.length) continue;
-          const allUpDone = upAgents.every((id) => statusById[id] === 'done' || statusById[id] === 'failed');
+          const anyUpRunning = upAgents.some((id) => statusById[id] === 'running');
+          const allUpDone = hasCondNode
+            ? (!anyUpRunning && upAgents.some((id) => statusById[id] === 'done' || statusById[id] === 'failed'))
+            : upAgents.every((id) => statusById[id] === 'done' || statusById[id] === 'failed');
           if (!allUpDone) continue;
           const downIds = edges.filter((e) => e.from === n.id).map((e) => e.to);
           if (!downIds.length) {
@@ -2865,8 +3191,8 @@ window.__ModuleLoader__.load({
         const from = nodeById.get(edge.from);
         const to = nodeById.get(edge.to);
         if (!from || !to) return null;
-        const color = (SOCKET_TYPES.find((sock) => sock.id === edge.type) || SOCKET_TYPES[0]).color;
-        const d = edgePath(from, to, edge.type);
+        const color = edgeColorFor(from, edge);
+        const d = edgePath(from, to, edge);
         const highlighted = cutVictims.includes(edge.id);
         const hasSel = selectedSet.size > 0;
         const linkedToSel = hasSel && (selectedSet.has(edge.from) || selectedSet.has(edge.to));
@@ -2954,26 +3280,110 @@ window.__ModuleLoader__.load({
 
       const renderBand = (node) => {
         const isEntry = node.id === 'lead';
+        const inColor = inColorByNode.get(node.id) || null;
+        const inCount = inCountByNode.get(node.id) || 0;
+        const inText = inCount > 1 ? 'in ×' + inCount : 'in';
+        const unifiedInSocket = !isEntry && h('div', {
+          style: {
+            ...S.socket,
+            top: (ROW_H - PORT) / 2,
+            left: -PORT / 2,
+            borderColor: inColor || C.border,
+            background: inColor || C.elevated,
+            boxShadow: inColor
+              ? (fxLevel === 'vivid' ? '0 0 6px ' + inColor : '0 0 0 2px ' + C.elevated)
+              : '0 0 0 3px transparent',
+          },
+          title: t('tipSocketOut'),
+          onMouseDown: (e) => onInputDown(e, node.id),
+          onMouseUp: (e) => onInputUp(e, node.id),
+        });
+        if (node.kind === 'condition') {
+          const branches = conditionBranchesForUI(node, lang);
+          return h('div', { style: S.band },
+            unifiedInSocket,
+            h('span', { style: { ...S.rowLabel, position: 'absolute', left: '12px', top: '3px', pointerEvents: 'none' } }, inText),
+            branches.map((b) => {
+              const outLinked = connectedOut.has(node.id + '|branch:' + b.id);
+              const outTip = !b.custom
+                ? (b.id === 'true' ? t('tipCondTrue') : t('tipCondFalse'))
+                : t('tipBranchOut');
+              const editKey = 'branch:' + node.id + ':' + b.id;
+              return h('div', { key: b.id, style: S.condBranchRow },
+                h('div', {
+                  style: { display: 'flex', alignItems: 'center', marginRight: '10px' },
+                  onMouseDown: (e) => e.stopPropagation(),
+                },
+                  h('button', {
+                    type: 'button',
+                    style: S.condBranchExpand,
+                    title: t('tipExpandBranch'),
+                    onMouseEnter: (e) => { e.currentTarget.style.color = C.text; e.currentTarget.style.borderColor = b.color; },
+                    onMouseLeave: (e) => { e.currentTarget.style.color = C.dim; e.currentTarget.style.borderColor = C.border; },
+                    onClick: () => setRoleEditFor(roleEditFor === editKey ? null : editKey),
+                  }, '⤢'),
+                  h('input', {
+                    style: { ...S.condBranchInput, borderRight: '2px solid ' + b.color },
+                    value: b.label,
+                    placeholder: t('branchPh'),
+                    onFocus: () => setSelectedIds([node.id]),
+                    onChange: (e) => renameConditionBranch(node, b.id, e.target.value),
+                  }),
+                  branches.length > 2
+                    ? h('button', {
+                        type: 'button',
+                        style: S.condBranchDel,
+                        title: t('delBranchTip'),
+                        onMouseEnter: (e) => { e.currentTarget.style.color = '#e5534b'; },
+                        onMouseLeave: (e) => { e.currentTarget.style.color = C.dim; },
+                        onClick: () => removeConditionBranch(node, b.id),
+                      }, '×')
+                    : h('span', { style: S.condBranchDelSpacer }),
+                ),
+                roleEditFor === editKey && h('div', {
+                  style: { ...S.rolePopover, top: '-8px' },
+                  onMouseDown: (e) => e.stopPropagation(),
+                },
+                  h('div', {
+                    style: { display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px', fontSize: '10px', color: C.dim },
+                  },
+                    h('span', { style: { width: '7px', height: '7px', borderRadius: '50%', background: b.color, flex: '0 0 auto' } }),
+                    h('span', null, t('branchEditTitle')),
+                  ),
+                  h('textarea', {
+                    style: S.roleArea,
+                    value: b.label,
+                    placeholder: t('branchPh'),
+                    autoFocus: true,
+                    onChange: (e) => renameConditionBranch(node, b.id, e.target.value),
+                  }),
+                ),
+                h('div', {
+                  style: {
+                    ...S.socket,
+                    top: (COND_ROW_H - PORT) / 2,
+                    right: -PORT / 2,
+                    borderColor: b.color,
+                    background: outLinked ? b.color : C.elevated,
+                    boxShadow: outLinked
+                      ? (fxLevel === 'vivid' ? '0 0 6px ' + b.color : '0 0 0 2px ' + C.elevated)
+                      : '0 0 0 3px transparent',
+                  },
+                  title: outTip,
+                  onMouseDown: (e) => onOutputDown(e, node.id, 'prompt', b.id),
+                  onMouseUp: (e) => onOutputUp(e, node.id, 'prompt', b.id),
+                }),
+              );
+            }),
+          );
+        }
         return h('div', { style: S.band },
+          unifiedInSocket,
+          !isEntry && h('span', { style: { ...S.rowLabel, position: 'absolute', left: '12px', top: '3px', pointerEvents: 'none' } }, inText),
           SOCKET_TYPES.map((sock) => {
-            const inLinked = connectedIn.has(node.id + '|' + sock.id);
             const outLinked = connectedOut.has(node.id + '|' + sock.id);
             return h('div', { key: sock.id, style: S.row },
-              h('span', { style: S.rowLabel }, sock.label),
-              !isEntry && h('div', {
-                style: {
-                  ...S.socket,
-                  left: -PORT / 2,
-                  borderColor: sock.color,
-                  background: inLinked ? sock.color : C.elevated,
-                  boxShadow: inLinked
-                    ? (fxLevel === 'vivid' ? '0 0 6px ' + sock.color : '0 0 0 2px ' + C.elevated)
-                    : '0 0 0 3px transparent',
-                },
-                title: t('tipSocketOut'),
-                onMouseDown: (e) => onInputDown(e, node.id, sock.id),
-                onMouseUp: (e) => onInputUp(e, node.id, sock.id),
-              }),
+              h('span', { style: { ...S.rowLabel, position: 'absolute', right: '12px' } }, sock.label),
               h('div', {
                 style: {
                   ...S.socket,
@@ -2996,7 +3406,7 @@ window.__ModuleLoader__.load({
       // The canvas grows with its nodes so links past the original size are
       // still painted instead of being clipped by the SVG viewport.
       const contentW = Math.max(CONTENT_W, WORLD_PAD + Math.max(0, ...nodes.map((n) => n.x + NODE_W)) + 400);
-      const contentH = Math.max(CONTENT_H, WORLD_PAD + Math.max(0, ...nodes.map((n) => n.y + NODE_H)) + 400);
+      const contentH = Math.max(CONTENT_H, WORLD_PAD + Math.max(0, ...nodes.map((n) => n.y + nodeHeight(n))) + 400);
 
       const hitTest = (m) => {
         const left = Math.min(m.x1, m.x2);
@@ -3004,7 +3414,7 @@ window.__ModuleLoader__.load({
         const top = Math.min(m.y1, m.y2);
         const bottom = Math.max(m.y1, m.y2);
         return nodes
-          .filter((n) => n.x + NODE_W >= left && n.x <= right && n.y + NODE_H >= top && n.y <= bottom)
+          .filter((n) => n.x + NODE_W >= left && n.x <= right && n.y + nodeHeight(n) >= top && n.y <= bottom)
           .map((n) => n.id);
       };
 
@@ -3017,6 +3427,7 @@ window.__ModuleLoader__.load({
         h('div', { style: S.toolbar },
           h('button', { style: S.btn, onClick: () => addNode('agent'), type: 'button' }, t('addAgent')),
           h('button', { style: S.btn, onClick: () => addNode('lead'), type: 'button' }, t('addLead')),
+          h('button', { style: S.btn, onClick: () => addNode('condition'), type: 'button' }, t('addCond')),
           h('span', { style: S.toolSep }),
           h('button', { style: S.btn, onClick: undo, type: 'button', title: t('tipUndo') }, t('undo')),
           h('button', {
@@ -3053,9 +3464,25 @@ window.__ModuleLoader__.load({
               type: 'button',
               title: t('tipMore'),
               onMouseDown: (e) => e.stopPropagation(),
-              onClick: () => setMenuOpen(!menuOpen),
+              onClick: (e) => {
+                const next = !menuOpen;
+                if (next) {
+                  setPresetOpen(null);
+                  const rootRect = rootElRef.current && rootElRef.current.getBoundingClientRect();
+                  const btnRect = e.currentTarget && e.currentTarget.getBoundingClientRect();
+                  setMenuAlign(dropdownAlign(btnRect, rootRect, 204));
+                }
+                setMenuOpen(next);
+              },
             }, '⋯'),
-            menuOpen && h('div', { style: S.moreMenu, onMouseDown: (e) => e.stopPropagation() },
+            menuOpen && h('div', {
+              style: {
+                ...S.moreMenu,
+                left: menuAlign === 'left' ? 0 : 'auto',
+                right: menuAlign === 'left' ? 'auto' : 0,
+              },
+              onMouseDown: (e) => e.stopPropagation(),
+            },
               h('div', {
                 style: S.moreRow,
                 onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
@@ -3136,47 +3563,64 @@ window.__ModuleLoader__.load({
             ),
           ),
           h('div', { style: S.presetBar },
-            h('div', { style: S.presetRowTop },
-              h('input', {
-                style: S.presetInput,
-                value: presetName,
-                placeholder: t('presetName'),
-                onMouseDown: (e) => e.stopPropagation(),
-                onChange: (e) => setPresetName(e.target.value),
-                onKeyDown: (e) => { if (e.key === 'Enter') savePresetNow(); },
-              }),
-              h('button', { style: S.btn, onClick: savePresetNow, type: 'button', title: t('tipSave') }, t('save')),
-              (() => {
-                const names = Object.keys(presets);
-                return h('button', {
-                  style: S.btn,
-                  onClick: () => setPresetOpen(presetOpen === 'menu' ? null : 'menu'),
-                  type: 'button',
-                  title: t('tipPresets'),
-                }, t('presets') + (names.length ? ' (' + names.length + ')' : ''));
-              })(),
-            ),
-            // Feedback for saving / loading / syncing sits right under the name field.
-            h('span', { style: S.status },
-              status || (enabled ? (dirty ? t('unsaved') : t('synced')) : '')),
+            (() => {
+              const feedback = status || (enabled ? (dirty ? t('unsaved') : t('synced')) : '');
+              return feedback ? h('span', { style: S.status, title: feedback }, feedback) : null;
+            })(),
+            (() => {
+              const names = Object.keys(presets);
+              return h('button', {
+                style: S.btn,
+                onClick: (e) => {
+                  const next = presetOpen === 'menu' ? null : 'menu';
+                  if (next) {
+                    setMenuOpen(false);
+                    const rootRect = rootElRef.current && rootElRef.current.getBoundingClientRect();
+                    const btnRect = e.currentTarget && e.currentTarget.getBoundingClientRect();
+                    setPresetAlign(dropdownAlign(btnRect, rootRect, 248));
+                  }
+                  setPresetOpen(next);
+                },
+                type: 'button',
+                title: t('tipPresets'),
+              }, t('presets') + (names.length ? ' (' + names.length + ')' : ''));
+            })(),
             presetOpen === 'menu' && (() => {
               const names = Object.keys(presets);
               const templates = builtinTemplates(lang);
-              return h('div', { style: S.presetMenu, onMouseDown: (e) => e.stopPropagation() },
+              return h('div', {
+                style: {
+                  ...S.presetMenu,
+                  left: presetAlign === 'left' ? 0 : 'auto',
+                  right: presetAlign === 'left' ? 'auto' : 0,
+                },
+                onMouseDown: (e) => e.stopPropagation(),
+              },
+                h('div', { style: S.presetSaveBox },
+                  h('div', { style: S.presetSaveTitle }, t('presetSaveTitle')),
+                  h('div', { style: S.presetSaveRow },
+                    h('input', {
+                      style: S.presetInput,
+                      value: presetName,
+                      placeholder: t('presetNamePh'),
+                      onMouseDown: (e) => e.stopPropagation(),
+                      onChange: (e) => setPresetName(e.target.value),
+                      onKeyDown: (e) => { if (e.key === 'Enter') savePresetNow(); },
+                    }),
+                    h('button', {
+                      style: { ...S.btn, padding: '4px 8px', fontSize: '11px' },
+                      onClick: savePresetNow,
+                      type: 'button',
+                      title: t('tipSave'),
+                    }, t('save')),
+                  ),
+                ),
                 h('div', {
                   style: { ...S.presetRow, color: C.accent, fontWeight: 500, borderBottom: '1px solid ' + C.border, marginBottom: '4px', paddingBottom: '6px', borderRadius: '4px 4px 0 0' },
                   onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
                   onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
                   onClick: () => clearCanvas(),
                 }, h('span', { style: S.presetRowText }, t('newBlankCanvas'))),
-                h('div', { style: S.menuHead }, t('builtinTemplates')),
-                templates.map((tpl) => h('div', {
-                  key: tpl.id,
-                  style: S.presetRow,
-                  onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
-                  onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
-                  onClick: () => applyTemplate(tpl),
-                }, h('span', { style: S.presetRowText, title: tpl.name }, tpl.name))),
                 h('div', { style: S.menuHead }, t('myPresets')),
                 names.length
                   ? names.map((name) => h('div', {
@@ -3189,6 +3633,14 @@ window.__ModuleLoader__.load({
                       h('button', { style: S.presetDel, type: 'button', title: t('del'), onClick: () => deletePreset(name) }, '×'),
                     ))
                   : h('div', { style: S.presetEmpty }, t('presetEmpty')),
+                h('div', { style: S.menuHead }, t('builtinTemplates')),
+                templates.map((tpl) => h('div', {
+                  key: tpl.id,
+                  style: S.presetRow,
+                  onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+                  onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+                  onClick: () => applyTemplate(tpl),
+                }, h('span', { style: S.presetRowText, title: tpl.name }, tpl.name))),
               );
             })(),
           ),
@@ -3250,6 +3702,12 @@ window.__ModuleLoader__.load({
               onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
               onClick: () => addNode('lead', { x: addMenu.wx, y: addMenu.wy }),
             }, h('span', null, t('addLead')), h('span', { style: S.addMenuHint }, '2')),
+            h('div', {
+              style: S.addMenuRow,
+              onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+              onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+              onClick: () => addNode('condition', { x: addMenu.wx, y: addMenu.wy }),
+            }, h('span', null, t('addCond')), h('span', { style: S.addMenuHint }, '3')),
           ),
           h('div', {
             ref: canvasElRef,
@@ -3287,7 +3745,7 @@ window.__ModuleLoader__.load({
                 strokeDasharray: '4 3',
               }),
               pending && (() => {
-                const color = (SOCKET_TYPES.find((t) => t.id === pending.type) || SOCKET_TYPES[0]).color;
+                const color = pending.color || (SOCKET_TYPES.find((t) => t.id === pending.type) || SOCKET_TYPES[0]).color;
                 const d = 'M ' + (pending.sx + WORLD_PAD) + ' ' + (pending.sy + WORLD_PAD) + ' L ' + (pending.x + WORLD_PAD) + ' ' + (pending.y + WORLD_PAD);
                 return h('path', { d, stroke: color, strokeWidth: 2, strokeDasharray: '4 4', fill: 'none' });
               })(),
@@ -3295,6 +3753,7 @@ window.__ModuleLoader__.load({
             nodes.map((node) => {
               const isEntry = node.id === 'lead';
               const isLeadKind = node.kind === 'lead';
+              const isCondKind = node.kind === 'condition';
               const roleInput = (style) => h('div', { style },
                 h('span', { style: S.fieldLabel }, t('role')),
                 h('input', {
@@ -3334,14 +3793,17 @@ window.__ModuleLoader__.load({
               const topBarBg = (isRunning || isLeadReady) && fxLevel === 'vivid'
                 ? (isLeadKind
                   ? 'linear-gradient(90deg, #2f81f7 0%, #79c0ff 50%, #2f81f7 100%)'
-                  : 'linear-gradient(90deg, #2f81f7 0%, #58d580 50%, #2f81f7 100%)')
-                : (isFailed ? '#e5534b' : (isLeadKind ? '#2f81f7' : '#3fb950'));
+                  : (isCondKind
+                    ? 'linear-gradient(90deg, #d29922 0%, #f2cc60 50%, #d29922 100%)'
+                    : 'linear-gradient(90deg, #2f81f7 0%, #58d580 50%, #2f81f7 100%)'))
+                : (isFailed ? '#e5534b' : (isLeadKind ? '#2f81f7' : (isCondKind ? '#d29922' : '#3fb950')));
               return h('div', {
                 key: node.id,
                 'data-node': node.id,
                 className: nodeClass,
                 style: {
                   ...S.node,
+                  height: nodeHeight(node),
                   left: node.x + WORLD_PAD,
                   top: node.y + WORLD_PAD,
                   ...(isLeadKind ? S.leadNode : null),
@@ -3360,67 +3822,68 @@ window.__ModuleLoader__.load({
                 }),
                 h('div', { style: S.nodeHeader }),
                 h('div', { style: S.bandDivider }),
-                isDeadEnd && h('div', {
-                  style: S.warnChip,
-                  title: t('tipDeadEnd'),
-                  onMouseDown: (e) => e.stopPropagation(),
-                }, '⚠ ', t('stDeadEnd')),
-                (() => {
-                  const latestRun = !isLeadKind ? runsById[node.id] : null;
-                  const statusColor = isLeadReady ? '#2f81f7'
-                    : isLeadDone ? '#3fb950'
-                      : isLeadKind ? C.dim
-                        : nodeStatus === 'running' ? '#2f81f7'
-                          : nodeStatus === 'failed' ? '#e5534b'
-                            : nodeStatus === 'done' ? '#3fb950' : C.dim;
-                  const statusTint = isLeadReady || nodeStatus === 'running'
-                    ? 'rgba(47,129,247,0.14)'
-                    : nodeStatus === 'failed'
-                      ? 'rgba(229,83,75,0.14)'
-                      : isDone
-                        ? 'rgba(63,185,80,0.14)'
-                        : 'transparent';
-                  const statusLabel = isOrphan ? t('stOrphan')
-                    : isSoloLead ? t('stSoloLead')
-                      : isLeadReady ? t('stLeadReady')
-                        : isLeadDone ? t('stDone')
-                          : isLeadKind ? t('stLead')
-                            : nodeStatus === 'running' ? t('stRunning')
-                              : nodeStatus === 'failed' ? t('stFailed')
-                                : nodeStatus === 'done' ? t('stDone') : t('stPending');
-                  const glyph = nodeStatus === 'running'
-                    ? h('span', {
-                        className: fxLevel !== 'minimal' ? 'dsh-wc-dot-live' : undefined,
-                        style: { width: '6px', height: '6px', borderRadius: '50%', background: statusColor, flex: '0 0 auto' },
-                      })
-                    : isLeadReady ? h('span', { className: fxLevel !== 'minimal' ? 'dsh-wc-dot-live' : undefined }, '⏸')
-                      : isDone ? '✓'
-                        : nodeStatus === 'failed' ? '✕' : null;
-                  if (latestRun) {
-                    const label = enabled ? statusLabel : t('openChat');
-                    const color = enabled ? statusColor : C.accent;
-                    const bg = enabled && statusTint !== 'transparent' ? statusTint : C.elevated;
-                    return h('button', {
-                      type: 'button',
-                      style: { ...S.statusBtn, color, background: bg, borderColor: color === C.dim ? C.border : color },
-                      title: t('tipOpenRun'),
+                isDeadEnd
+                  ? h('div', {
+                      style: S.warnChip,
+                      title: t('tipDeadEnd'),
                       onMouseDown: (e) => e.stopPropagation(),
-                      onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
-                      onMouseLeave: (e) => { e.currentTarget.style.background = bg; },
-                      onClick: (e) => { e.stopPropagation(); openNodeSession(node); },
-                    }, enabled ? glyph : null, label, ' ↗');
-                  }
-                  if (!enabled) return null;
-                  return h('div', {
-                    style: {
-                      ...S.statusChip,
-                      color: statusColor,
-                      background: statusTint,
-                      border: statusTint !== 'transparent' ? ('1px solid ' + statusColor) : 'none',
-                    },
-                    title: isLeadReady ? t('tipLeadReady') : (isLeadKind ? t('tipLead') : (isOrphan ? t('tipOrphan') : t('tipStatus'))),
-                  }, glyph, statusLabel);
-                })(),
+                    }, '⚠ ', t('stDeadEnd'))
+                  : (() => {
+                      const latestRun = !isLeadKind ? runsById[node.id] : null;
+                      const statusColor = isLeadReady ? '#2f81f7'
+                        : isLeadDone ? '#3fb950'
+                          : isLeadKind ? C.dim
+                            : nodeStatus === 'running' ? '#2f81f7'
+                              : nodeStatus === 'failed' ? '#e5534b'
+                                : nodeStatus === 'done' ? '#3fb950' : C.dim;
+                      const statusTint = isLeadReady || nodeStatus === 'running'
+                        ? 'rgba(47,129,247,0.14)'
+                        : nodeStatus === 'failed'
+                          ? 'rgba(229,83,75,0.14)'
+                          : isDone
+                            ? 'rgba(63,185,80,0.14)'
+                            : 'transparent';
+                      const statusLabel = isOrphan ? t('stOrphan')
+                        : isSoloLead ? t('stSoloLead')
+                          : isLeadReady ? t('stLeadReady')
+                            : isLeadDone ? t('stDone')
+                              : isLeadKind ? t('stLead')
+                                : nodeStatus === 'running' ? t('stRunning')
+                                  : nodeStatus === 'failed' ? t('stFailed')
+                                    : nodeStatus === 'done' ? t('stDone') : t('stPending');
+                      const glyph = nodeStatus === 'running'
+                        ? h('span', {
+                            className: fxLevel !== 'minimal' ? 'dsh-wc-dot-live' : undefined,
+                            style: { width: '6px', height: '6px', borderRadius: '50%', background: statusColor, flex: '0 0 auto' },
+                          })
+                        : isLeadReady ? h('span', { className: fxLevel !== 'minimal' ? 'dsh-wc-dot-live' : undefined }, '⏸')
+                          : isDone ? '✓'
+                            : nodeStatus === 'failed' ? '✕' : null;
+                      if (latestRun) {
+                        const label = enabled ? statusLabel : t('openChat');
+                        const color = enabled ? statusColor : C.accent;
+                        const bg = enabled && statusTint !== 'transparent' ? statusTint : C.elevated;
+                        return h('button', {
+                          type: 'button',
+                          style: { ...S.statusBtn, color, background: bg, borderColor: color === C.dim ? C.border : color },
+                          title: t('tipOpenRun'),
+                          onMouseDown: (e) => e.stopPropagation(),
+                          onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+                          onMouseLeave: (e) => { e.currentTarget.style.background = bg; },
+                          onClick: (e) => { e.stopPropagation(); openNodeSession(node); },
+                        }, enabled ? glyph : null, label, ' ↗');
+                      }
+                      if (!enabled) return null;
+                      return h('div', {
+                        style: {
+                          ...S.statusChip,
+                          color: statusColor,
+                          background: statusTint,
+                          border: statusTint !== 'transparent' ? ('1px solid ' + statusColor) : 'none',
+                        },
+                        title: isLeadReady ? t('tipLeadReady') : (isLeadKind ? t('tipLead') : (isOrphan ? t('tipOrphan') : t('tipStatus'))),
+                      }, glyph, statusLabel);
+                    })(),
                 isEntry
                   ? h('div', { style: S.titleReadonly }, t('leadThis'))
                   : h('input', {
@@ -3432,7 +3895,16 @@ window.__ModuleLoader__.load({
                     }),
                 isEntry
                   ? h(React.Fragment, null,
-                    h('div', { style: S.leadLabel }, h('span', { style: S.fieldLabel }, t('task'))),
+                    h('div', { style: S.leadLabel },
+                      h('span', { style: S.fieldLabel }, t('task')),
+                      h('button', {
+                        type: 'button',
+                        style: S.condAddBtn,
+                        title: t('tipExpandEdit'),
+                        onMouseDown: (e) => e.stopPropagation(),
+                        onClick: () => setRoleEditFor(roleEditFor === node.id ? null : node.id),
+                      }, '⤢'),
+                    ),
                     h('textarea', {
                       style: S.task,
                       value: node.task || '',
@@ -3441,10 +3913,31 @@ window.__ModuleLoader__.load({
                       onFocus: () => setSelectedIds([node.id]),
                       onChange: (e) => updateNode(node.id, { task: e.target.value }),
                     }),
+                    roleEditFor === node.id && h('div', {
+                      style: S.rolePopover,
+                      onMouseDown: (e) => e.stopPropagation(),
+                    },
+                      h('textarea', {
+                        style: S.roleArea,
+                        value: node.task || '',
+                        placeholder: t('taskPh'),
+                        autoFocus: true,
+                        onChange: (e) => updateNode(node.id, { task: e.target.value }),
+                      }),
+                    ),
                   )
                   : isLeadKind
                     ? h(React.Fragment, null,
-                      h('div', { style: S.leadLabel }, h('span', { style: S.fieldLabel }, t('role'))),
+                      h('div', { style: S.leadLabel },
+                        h('span', { style: S.fieldLabel }, t('role')),
+                        h('button', {
+                          type: 'button',
+                          style: S.condAddBtn,
+                          title: t('tipExpandEdit'),
+                          onMouseDown: (e) => e.stopPropagation(),
+                          onClick: () => setRoleEditFor(roleEditFor === node.id ? null : node.id),
+                        }, '⤢'),
+                      ),
                       h('textarea', {
                         style: S.task,
                         value: node.role || '',
@@ -3453,8 +3946,82 @@ window.__ModuleLoader__.load({
                         onFocus: () => setSelectedIds([node.id]),
                         onChange: (e) => updateNode(node.id, { role: e.target.value }),
                       }),
+                      roleEditFor === node.id && h('div', {
+                        style: S.rolePopover,
+                        onMouseDown: (e) => e.stopPropagation(),
+                      },
+                        h('textarea', {
+                          style: S.roleArea,
+                          value: node.role || '',
+                          placeholder: t('rolePhLead'),
+                          autoFocus: true,
+                          onChange: (e) => updateNode(node.id, { role: e.target.value }),
+                        }),
+                      ),
                     )
-                    : h(React.Fragment, null,
+                    : isCondKind
+                      ? h(React.Fragment, null,
+                        h('div', { style: S.fieldModel },
+                          h('span', { style: lang === 'en' ? S.fieldLabelEn : S.fieldLabel }, t('model')),
+                          modelControl(node),
+                        ),
+                        h('div', { style: S.fieldReason },
+                          h('span', { style: lang === 'en' ? S.fieldLabelEn : S.fieldLabel }, t('reason')),
+                          reasoningControl(node),
+                        ),
+                        h('div', { style: S.fieldScope },
+                          h('span', { style: lang === 'en' ? S.fieldLabelEn : S.fieldLabel }, t('fallbackModel')),
+                          fallbackControl(node),
+                        ),
+                        h('div', { style: S.condLabelRow },
+                          h('span', { style: S.fieldLabel }, t('condLabel')),
+                          h('div', { style: S.condBtnGroup },
+                            h('button', {
+                              type: 'button',
+                              style: node.multiMatch ? S.condModeBtnOn : S.condAddBtn,
+                              title: t('tipMatchMode'),
+                              onMouseDown: (e) => e.stopPropagation(),
+                              onClick: () => updateNode(node.id, { multiMatch: !node.multiMatch }),
+                            }, node.multiMatch ? t('matchMulti') : t('matchSingle')),
+                            h('button', {
+                              type: 'button',
+                              style: S.condAddBtn,
+                              title: t('tipExpandEdit'),
+                              onMouseDown: (e) => e.stopPropagation(),
+                              onClick: () => setRoleEditFor(roleEditFor === node.id ? null : node.id),
+                            }, '⤢'),
+                            conditionBranchesForUI(node, lang).length < 16 && h('button', {
+                              type: 'button',
+                              style: S.condAddBtn,
+                              onMouseDown: (e) => e.stopPropagation(),
+                              onMouseEnter: (e) => { e.currentTarget.style.color = C.text; e.currentTarget.style.borderColor = C.accent; },
+                              onMouseLeave: (e) => { e.currentTarget.style.color = C.dim; e.currentTarget.style.borderColor = C.border; },
+                              onClick: () => addConditionBranch(node),
+                            }, t('addBranch')),
+                          ),
+                        ),
+                        h('textarea', {
+                          style: S.condArea,
+                          value: node.role || '',
+                          placeholder: t('condPh'),
+                          onMouseDown: (e) => e.stopPropagation(),
+                          onFocus: () => setSelectedIds([node.id]),
+                          onChange: (e) => updateNode(node.id, { role: e.target.value }),
+                        }),
+                        roleEditFor === node.id && h('div', {
+                          style: S.rolePopover,
+                          onMouseDown: (e) => e.stopPropagation(),
+                        },
+                          h('textarea', {
+                            style: S.roleArea,
+                            value: node.role || '',
+                            placeholder: t('condPh'),
+                            autoFocus: true,
+                            onChange: (e) => updateNode(node.id, { role: e.target.value }),
+                          }),
+                        ),
+                      )
+                      : h(React.Fragment, null,
                       h('div', { style: S.fieldModel },
                         h('span', { style: lang === 'en' ? S.fieldLabelEn : S.fieldLabel }, t('model')),
                         modelControl(node),
@@ -3477,15 +4044,29 @@ window.__ModuleLoader__.load({
                       ),
                       h('div', { style: S.fieldRole },
                         h('span', { style: lang === 'en' ? S.fieldLabelEn : S.fieldLabel }, t('role')),
-                        h('button', {
-                          style: S.selectBtn,
-                          type: 'button',
-                          title: t('rolePhAgent'),
-                          onMouseDown: (e) => e.stopPropagation(),
-                          onClick: () => setRoleEditFor(roleEditFor === node.id ? null : node.id),
-                        },
-                          h('span', { style: S.selectText }, node.role || t('rolePhAgent')),
-                          h('span', { style: S.caret }, '✎'),
+                        h('div', { style: { display: 'flex', alignItems: 'center', gap: '4px', flex: '1 1 auto', minWidth: 0 } },
+                          h('input', {
+                            style: {
+                              flex: '1 1 auto', minWidth: 0, height: '18px', boxSizing: 'border-box',
+                              padding: '0 5px', borderRadius: '4px',
+                              border: '1px solid ' + C.border, background: C.base, color: C.text,
+                              fontSize: '10px', lineHeight: '14px', outline: 'none', userSelect: 'text',
+                            },
+                            value: node.role || '',
+                            placeholder: t('rolePhAgent'),
+                            onMouseDown: (e) => e.stopPropagation(),
+                            onFocus: () => setSelectedIds([node.id]),
+                            onChange: (e) => updateNode(node.id, { role: e.target.value }),
+                          }),
+                          h('button', {
+                            style: { ...S.condAddBtn, height: '18px', padding: '0 5px', flex: '0 0 auto' },
+                            type: 'button',
+                            title: t('tipExpandEdit'),
+                            onMouseDown: (e) => e.stopPropagation(),
+                            onMouseEnter: (e) => { e.currentTarget.style.color = C.text; e.currentTarget.style.borderColor = C.accent; },
+                            onMouseLeave: (e) => { e.currentTarget.style.color = C.dim; e.currentTarget.style.borderColor = C.border; },
+                            onClick: () => setRoleEditFor(roleEditFor === node.id ? null : node.id),
+                          }, '⤢'),
                         ),
                       ),
                       roleEditFor === node.id && h('div', {
@@ -3545,7 +4126,7 @@ window.__ModuleLoader__.load({
           try { console.error('[workflow-canvas] apply failed', error); } catch (_e) { /* ignore */ }
         }
       },
-      __test: { topoOrder, wouldCycle, soloLeadNodeIds, layoutGraph, builtinTemplates, deadEndNodeIds, nextEffectLevel, nextMaxParallel, zoomAroundPoint, scrubZoom, buildPlan, loadDoc, saveDoc, storageKey, socketCenterY, distanceToEdge, edgeCurve },
+      __test: { topoOrder, wouldCycle, soloLeadNodeIds, layoutGraph, builtinTemplates, deadEndNodeIds, nextEffectLevel, nextMaxParallel, dropdownAlign, zoomAroundPoint, scrubZoom, buildPlan, loadDoc, saveDoc, storageKey, socketCenterY, nodeHeight, conditionBranchesForUI, distanceToEdge, edgeCurve },
     };
   },
 });

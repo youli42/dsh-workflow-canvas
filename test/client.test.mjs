@@ -248,6 +248,75 @@ test('vivid edge glow does not use an objectBoundingBox SVG filter (which clips 
   const byId = new Map(swe.nodes.map((n) => [n.id, n]));
   const blue = swe.edges.find((e) => e.type === 'structured');
   assert.ok(blue, 'SWE template has a structured blue edge');
-  const curve = client.edgeCurve(byId.get(blue.from), byId.get(blue.to), blue.type);
-  assert.equal(curve.y1, curve.y2, 'horizontal structured edge exists and must remain visible');
+  const curve = client.edgeCurve(byId.get(blue.from), byId.get(blue.to), blue);
+  assert.equal(curve.y1, byId.get(blue.from).y + 2000 + client.socketCenterY(1), 'structured exits Row 1');
+  assert.equal(curve.y2, byId.get(blue.to).y + 2000 + client.socketCenterY(0), 'unified left input enters Row 0');
+});
+
+test('condition template, switch/case branches, edgeCurve geometry, and buildPlan preserve kind and branches', () => {
+  const condTpl = client.builtinTemplates('zh').find((t) => t.id === 'tpl-cond');
+  assert.ok(condTpl, 'includes conditional branching starter template');
+  const condNode = condTpl.nodes.find((n) => n.kind === 'condition');
+  assert.ok(condNode, 'conditional template contains a condition node');
+  const trueEdge = condTpl.edges.find((e) => e.from === condNode.id && e.branch === 'true');
+  const falseEdge = condTpl.edges.find((e) => e.from === condNode.id && e.branch === 'false');
+  assert.ok(trueEdge && falseEdge, 'condition node has both true and false branch edges');
+
+  const from = { x: 100, y: 100 };
+  const to = { x: 400, y: 100 };
+  const cTrue = client.edgeCurve(from, to, { type: 'prompt', branch: 'true' });
+  const cFalse = client.edgeCurve(from, to, { type: 'prompt', branch: 'false' });
+  const cSession = client.edgeCurve(from, to, { type: 'session-ref' });
+  assert.equal(cTrue.y1, from.y + 2000 + 176 + 10, 'true branch exits Row 0 center (COND_ROW_H=20)');
+  assert.equal(cFalse.y1, from.y + 2000 + 176 + 20 + 10, 'false branch exits Row 1 center (COND_ROW_H=20)');
+  assert.equal(cTrue.y2, to.y + 2000 + client.socketCenterY(0), 'true branch enters unified input Row 0');
+  assert.equal(cFalse.y2, to.y + 2000 + client.socketCenterY(0), 'false branch enters unified input Row 0');
+  assert.equal(cSession.y1, from.y + 2000 + client.socketCenterY(2), 'session exits Row 2');
+  assert.equal(cSession.y2, to.y + 2000 + client.socketCenterY(0), 'session enters unified input Row 0');
+
+  const switchNode = {
+    id: 'sw',
+    kind: 'condition',
+    label: '多路分流',
+    multiMatch: true,
+    x: 100,
+    y: 100,
+    branches: [
+      { id: 'c1', label: '前端' },
+      { id: 'c2', label: '后端' },
+      { id: 'c3', label: '单测' },
+      { id: 'c4', label: '文档' },
+      { id: 'c5', label: '性能' },
+      { id: 'c6', label: '安全' },
+    ],
+  };
+  assert.equal(client.nodeHeight(switchNode), 176 + 6 * 20 + 24, '6-branch switch/case node scales smoothly past 5');
+  const cRedo = client.edgeCurve(switchNode, to, { type: 'prompt', branch: 'c3' });
+  assert.equal(cRedo.y1, switchNode.y + 2000 + 176 + 2 * 20 + 10, '3rd branch exits Row 2 center');
+
+  const built = client.buildPlan(
+    [
+      { id: 'lead', kind: 'lead', task: 'switch test' },
+      switchNode,
+      { id: 'n1', kind: 'agent', label: 'A' },
+    ],
+    [
+      { from: 'lead', to: 'sw', type: 'prompt' },
+      { from: 'sw', to: 'n1', type: 'prompt', branch: 'c2' },
+    ],
+  );
+  assert.ok(!built.error);
+  const planSw = built.plan.nodes.find((n) => n.id === 'sw');
+  assert.equal(planSw.kind, 'condition');
+  assert.equal(planSw.branches.length, 6);
+  assert.equal(planSw.multiMatch, true);
+  assert.equal(built.plan.edges.find((e) => e.from === 'sw').branch, 'c2');
+});
+
+test('dropdownAlign flips to left-anchored when trigger wraps to the left edge of the pane', () => {
+  const pane = { left: 100, right: 420 };
+  // Trigger wrapped to left edge of row 2 (only 42px from pane left -> right-align would clip)
+  assert.equal(client.dropdownAlign({ left: 110, right: 142 }, pane, 204), 'left');
+  // Trigger sitting near right edge (310px from pane left -> right-align fits cleanly)
+  assert.equal(client.dropdownAlign({ left: 378, right: 410 }, pane, 204), 'right');
 });

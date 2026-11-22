@@ -132,16 +132,208 @@ function downstreamLabels(plan, node) {
     .filter(Boolean);
 }
 
-function briefFor(plan, node, results, failedMap) {
-  const ups = upstreamOf(plan, node);
+function normalizeKind(rawKind) {
+  if (rawKind === 'lead') return 'lead';
+  if (rawKind === 'condition') return 'condition';
+  return 'agent';
+}
+
+function normalizeBranch(rawBranch) {
+  if (rawBranch === true) return 'true';
+  if (rawBranch === false) return 'false';
+  if (typeof rawBranch !== 'string') return '';
+  return rawBranch.trim();
+}
+
+const DEFAULT_BINARY_BRANCHES = [
+  { id: 'true', label: '是' },
+  { id: 'false', label: '否' },
+];
+
+/**
+ * Normalize a condition node's branch list (2–5 entries).
+ * Accepts either string arrays (e.g. `['通过', '小修', '重做']`) or `{ id, label }` objects.
+ * Returns `null` when the node uses the default binary `true`/`false` pair.
+ */
+function normalizeBranches(rawBranches) {
+  if (!Array.isArray(rawBranches) || rawBranches.length < 2) return null;
+  const out = [];
+  const used = new Set();
+  for (let i = 0; i < Math.min(16, rawBranches.length); i += 1) {
+    const item = rawBranches[i];
+    let id = '';
+    let label = '';
+    if (typeof item === 'string') {
+      label = item.trim();
+      id = label;
+    } else if (item && typeof item === 'object') {
+      id = typeof item.id === 'string' ? item.id.trim() : '';
+      label = typeof item.label === 'string' ? item.label.trim() : '';
+      if (!id) id = label;
+      if (!label) label = id;
+    }
+    if (!id) id = 'case_' + (i + 1);
+    if (!label) label = '分支 ' + (i + 1);
+    let uniq = id;
+    let suffix = 2;
+    while (used.has(uniq)) { uniq = id + '_' + suffix; suffix += 1; }
+    used.add(uniq);
+    out.push({ id: uniq, label });
+  }
+  return out.length >= 2 ? out : null;
+}
+
+function conditionBranches(node) {
+  const custom = normalizeBranches(node && node.branches);
+  const multiMatch = Boolean(node && node.multiMatch);
+  if (custom) return { branches: custom, isDefaultBinary: false, multiMatch };
+  return { branches: DEFAULT_BINARY_BRANCHES, isDefaultBinary: !multiMatch, multiMatch };
+}
+
+function edgeKey(e) {
+  return String(e.from) + '->' + String(e.to) + '|' + String(e.type || 'prompt') + '|' + String(e.branch || '');
+}
+
+/**
+ * Parse a condition node's structured or text output into
+ * `{ branches, branchLabels, branch, branchLabel, pass, reason }`.
+ * Supports:
+ *   - default binary `{ pass: boolean }`
+ *   - single-match `switch/case` (`{ branches: [id] }` or `{ branch: id }`, or `[]` when none match)
+ *   - multi-match parallel fan-out (`multiMatch: true`, `{ branches: [id1, id2, ...] }` or `[]`)
+ */
+function parseConditionDecision(result, fallbackText, nodeOrBranches) {
+  const { branches, isDefaultBinary, multiMatch } = Array.isArray(nodeOrBranches)
+    ? { branches: normalizeBranches(nodeOrBranches) || DEFAULT_BINARY_BRANCHES, isDefaultBinary: !normalizeBranches(nodeOrBranches), multiMatch: false }
+    : conditionBranches(nodeOrBranches);
+
+  const resolveByToken = (token) => {
+    const t = String(token || '').trim();
+    if (!t) return null;
+    const exactId = branches.find((b) => b.id === t);
+    if (exactId) return exactId;
+    const exactLabel = branches.find((b) => b.label === t);
+    if (exactLabel) return exactLabel;
+    const lower = t.toLowerCase();
+    const ci = branches.find((b) => b.id.toLowerCase() === lower || b.label.toLowerCase() === lower);
+    return ci || null;
+  };
+
+  const makeDecision = (pickedList, reason) => {
+    const seen = new Set();
+    const uniq = [];
+    for (const item of pickedList) {
+      if (!item || seen.has(item.id)) continue;
+      seen.add(item.id);
+      uniq.push(item);
+    }
+    const finalList = multiMatch ? uniq : uniq.slice(0, 1);
+    const first = finalList[0] || null;
+    return {
+      branches: finalList.map((b) => b.id),
+      branchLabels: finalList.map((b) => b.label),
+      branch: first ? first.id : '',
+      branchLabel: first ? first.label : '',
+      pass: isDefaultBinary ? Boolean(first && first.id === 'true') : finalList.length > 0,
+      reason: String(reason || ''),
+    };
+  };
+
+  const tryObj = (obj) => {
+    if (!obj || typeof obj !== 'object') return null;
+    if (Array.isArray(obj.branches)) {
+      const hits = obj.branches.map(resolveByToken).filter(Boolean);
+      return makeDecision(hits, obj.reason);
+    }
+    if (typeof obj.branch === 'string') {
+      const trimmed = obj.branch.trim();
+      if (!trimmed || /^(none|null|无|都不满足|未命中)$/i.test(trimmed)) {
+        return makeDecision([], obj.reason);
+      }
+      const hit = resolveByToken(trimmed);
+      if (hit) return makeDecision([hit], obj.reason);
+    }
+    if (typeof obj.pass === 'boolean') {
+      const picked = obj.pass ? branches[0] : branches[branches.length - 1];
+      return makeDecision([picked], obj.reason);
+    }
+    return null;
+  };
+
+  const fromStructured = tryObj(result && result.structured);
+  if (fromStructured) return fromStructured;
+
+  const raw = String(fallbackText || '').trim();
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start !== -1 && end > start) {
+    try {
+      const fromJson = tryObj(JSON.parse(raw.slice(start, end + 1)));
+      if (fromJson) return fromJson;
+    } catch (_e) { /* fall through */ }
+  }
+
+  if (isDefaultBinary) {
+    if (/^(true|yes|pass|通过|是)\b/i.test(raw)) return makeDecision([branches[0]], raw.slice(0, 200));
+    return makeDecision([branches[1]], raw.slice(0, 200) || '未能解析布尔判断，默认走「否」分支');
+  }
+
+  // Multi-way text fallback: collect matching branch ids/labels; return empty [] if none match.
+  const lowerRaw = raw.toLowerCase();
+  const matched = [];
+  for (const b of branches) {
+    if (lowerRaw.includes(b.id.toLowerCase()) || lowerRaw.includes(b.label.toLowerCase())) {
+      matched.push(b);
+      if (!multiMatch) break;
+    }
+  }
+  return makeDecision(matched, raw.slice(0, 200) || (matched.length ? '' : '未命中任何分支，已跳过后续分支'));
+}
+
+function briefFor(plan, node, results, failedMap, prunedSet) {
+  const ups = upstreamOf(plan, node).filter((u) => !(prunedSet && prunedSet.has(u.from.id)));
   const downs = downstreamLabels(plan, node);
   const head = [];
-  head.push('【工作流节点】你在一个多步工作流里负责「' + node.label + '」这一步（子代理）。');
-  if (ups.length === 0) head.push('【总任务】' + plan.task);
-  head.push('【职责】' + (node.role || node.label));
-  if (ups.length) head.push('【上游】' + ups.map((u) => u.from.label).join('、') + ' 已交付结果给你（见下文）。');
-  head.push('【下游】' + (downs.length ? downs.join('、') + ' 会使用你的输出。' : '你是终点，结果会直接交付给用户。'));
-  head.push('【要求】只完成你这一步；最终回复只输出简洁、可直接被下游或 Lead 消费的交付报告（结论、改动清单、关键接口/路径），不要包含思考独白、过程叙述或对其他并行节点的评价。若因环境或权限受限未能生成预期产物，必须在开头显式标注「【未完全交付】」并列出缺失项，不得把仅写脚本汇报为已完成。');
+  if (node.kind === 'condition') {
+    const outEdges = (plan.edges || []).filter((e) => e.from === node.id);
+    const byId = new Map((plan.nodes || []).map((n) => [n.id, n]));
+    const { branches, isDefaultBinary, multiMatch } = conditionBranches(node);
+    head.push('【工作流条件判断节点】你负责判断当前工作流接下来走哪条分支（「' + node.label + '」）。');
+    head.push('【总任务】' + plan.task);
+    if (isDefaultBinary) {
+      const yesTargets = outEdges.filter((e) => (normalizeBranch(e.branch) || 'true') === 'true').map((e) => (byId.get(e.to) || {}).label || e.to);
+      const noTargets = outEdges.filter((e) => normalizeBranch(e.branch) === 'false').map((e) => (byId.get(e.to) || {}).label || e.to);
+      head.push('【判断条件】' + (node.role || '判断上游步骤是否执行成功并达到预期；成功返回 true，失败或未达标返回 false。'));
+      head.push('【分支去向】pass=true（是）→ ' + (yesTargets.join('、') || '（无）') + '；pass=false（否）→ ' + (noTargets.join('、') || '（无）'));
+      head.push('【要求】严格依据上游实际输出（含成功/失败状态与【未完全交付】标记）做出客观判断，只返回 JSON 对象 {"pass": true/false, "reason": "一句话理由"}。');
+    } else {
+      const branchLines = branches.map((b, idx) => {
+        const targets = outEdges
+          .filter((e) => {
+            const eb = normalizeBranch(e.branch);
+            return eb ? eb === b.id : idx === 0;
+          })
+          .map((e) => (byId.get(e.to) || {}).label || e.to);
+        const tag = b.label === b.id ? '"' + b.id + '"' : '"' + b.id + '"（' + b.label + '）';
+        return '- ' + tag + ' → ' + (targets.join('、') || '（无下游）');
+      });
+      head.push('【判断规则】' + (node.role || (multiMatch
+        ? '根据上游结果选出所有满足条件的分支（可多选并行）；若均不满足返回空数组。'
+        : '根据上游结果选出最匹配的一条分支；若均不满足返回空数组（如有「其他/兜底」分支则选它）。')));
+      head.push('【匹配模式】' + (multiMatch
+        ? '多选并行（可返回 0 条、1 条或多条分支 id）'
+        : '单选分流（最多返回 1 条最匹配的分支 id；均不满足返回空数组 []）'));
+      head.push('【可选分支】\n' + branchLines.join('\n'));
+      head.push('【要求】严格依据上游实际输出（含成功/失败状态与【未完全交付】标记）做出客观判断，只返回 JSON 对象 {"branches": ["<分支id>"], "reason": "一句话理由"}；若没有任何分支满足，返回 {"branches": [], "reason": "..."}。');
+    }
+  } else {
+    head.push('【工作流节点】你在一个多步工作流里负责「' + node.label + '」这一步（子代理）。');
+    if (ups.length === 0) head.push('【总任务】' + plan.task);
+    head.push('【职责】' + (node.role || node.label));
+    if (ups.length) head.push('【上游】' + ups.map((u) => u.from.label).join('、') + ' 已交付结果给你（见下文）。');
+    head.push('【下游】' + (downs.length ? downs.join('、') + ' 会使用你的输出。' : '你是终点，结果会直接交付给用户。'));
+    head.push('【要求】只完成你这一步；最终回复只输出简洁、可直接被下游或 Lead 消费的交付报告（结论、改动清单、关键接口/路径），不要包含思考独白、过程叙述或对其他并行节点的评价。若因环境或权限受限未能生成预期产物，必须在开头显式标注「【未完全交付】」并列出缺失项，不得把仅写脚本汇报为已完成。');
+  }
   let text = head.join('\n') + '\n';
   for (const u of ups) {
     const value = results[u.from.id];
@@ -190,12 +382,13 @@ function isEmptyOutput(result) {
   return text.trim().length === 0;
 }
 
-async function spawnOnce(scope, plan, node, results, parent, signal, route, forcedChild, sid, failedMap) {
+async function spawnOnce(scope, plan, node, results, parent, signal, route, forcedChild, sid, failedMap, prunedSet) {
   const childKey = (id) => String(sid || '') + '::' + id;
+  const isCondition = node.kind === 'condition';
   const spec = {
     provider: 'spawn',
     label: node.label + '#' + node.id,
-    prompt: [{ type: 'text', text: briefFor(plan, node, results, failedMap) }],
+    prompt: [{ type: 'text', text: briefFor(plan, node, results, failedMap, prunedSet) }],
     parent,
     signal,
     delivery: 'caller',
@@ -207,15 +400,46 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
   if (model) agentOptions.model = model;
   if (node.reasoning) agentOptions.reasoningEffort = node.reasoning;
   if (Object.keys(agentOptions).length) spec.agentOptions = agentOptions;
-  if (node.preset) spec.agentPreset = node.preset;
-  const wantsStructured = Boolean(node.structured)
-    || (plan.edges || []).some((e) => e.from === node.id && e.type === 'structured');
-  if (wantsStructured) {
-    spec.outputSchema = {
-      type: 'object',
-      additionalProperties: true,
-      description: 'Return the result as a JSON object so downstream steps can consume it.',
-    };
+  if (isCondition) {
+    const { branches, isDefaultBinary, multiMatch } = conditionBranches(node);
+    spec.agentPreset = 'minimal';
+    spec.outputSchema = isDefaultBinary
+      ? {
+          type: 'object',
+          properties: {
+            pass: { type: 'boolean', description: 'true to follow the Yes/Pass branch, false to follow the No/Fail branch.' },
+            reason: { type: 'string', description: 'Concise one-sentence explanation for this routing decision.' },
+          },
+          required: ['pass', 'reason'],
+          additionalProperties: false,
+        }
+      : {
+          type: 'object',
+          properties: {
+            branches: {
+              type: 'array',
+              items: { type: 'string', enum: branches.map((b) => b.id) },
+              maxItems: multiMatch ? branches.length : 1,
+              description: multiMatch
+                ? 'All matching branch ids to execute in parallel (empty array if none match).'
+                : 'At most one best-matching branch id (empty array if none match).',
+            },
+            reason: { type: 'string', description: 'Concise one-sentence explanation for this routing decision.' },
+          },
+          required: ['branches', 'reason'],
+          additionalProperties: false,
+        };
+  } else {
+    if (node.preset) spec.agentPreset = node.preset;
+    const wantsStructured = Boolean(node.structured)
+      || (plan.edges || []).some((e) => e.from === node.id && e.type === 'structured');
+    if (wantsStructured) {
+      spec.outputSchema = {
+        type: 'object',
+        additionalProperties: true,
+        description: 'Return the result as a JSON object so downstream steps can consume it.',
+      };
+    }
   }
 
   const run = async (childId) => {
@@ -241,12 +465,17 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
         const message = String((error && error.message) || error);
         return { ok: false, text: '运行失败：' + message, reason: 'run-failed' };
       }
-      return {
+      const outText = textOf(result);
+      const outcome = {
         ok: !failed(result),
-        text: textOf(result),
+        text: outText,
         reason: result && result.stopReason,
         empty: isEmptyOutput(result),
       };
+      if (isCondition) {
+        outcome.decision = parseConditionDecision(result, outText, node);
+      }
+      return outcome;
     } finally {
       try { await activation.dispose(); } catch (_e) { /* ignore */ }
     }
@@ -293,20 +522,28 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
   return started;
 }
 
-async function spawnNode(scope, plan, node, results, parent, signal, sid, failedMap) {
+async function spawnNode(scope, plan, node, results, parent, signal, sid, failedMap, prunedSet) {
   const continueFrom = (plan.edges || [])
-    .filter((e) => e.to === node.id && e.type === 'session-ref')
+    .filter((e) => e.to === node.id && e.type === 'session-ref' && !(prunedSet && prunedSet.has(e.from)))
     .map((e) => liveChild.get(String(sid || '') + '::' + e.from)
       || childByNode.get(String(sid || '') + '::' + e.from))
     .find((id) => typeof id === 'string');
 
   if (continueFrom) {
-    const continued = await spawnOnce(scope, plan, node, results, parent, signal, undefined, continueFrom, sid, failedMap);
-    if (continued.ok) return { ok: true, empty: Boolean(continued.empty), text: continued.text + '\n（已在上游会话中继续）' };
+    const continued = await spawnOnce(scope, plan, node, results, parent, signal, undefined, continueFrom, sid, failedMap, prunedSet);
+    if (continued.ok) {
+      const out = { ok: true, empty: Boolean(continued.empty), text: continued.text + '\n（已在上游会话中继续）' };
+      if (continued.decision) out.decision = continued.decision;
+      return out;
+    }
   }
 
-  const first = await spawnOnce(scope, plan, node, results, parent, signal, undefined, undefined, sid, failedMap);
-  if (first.ok) return { ok: true, empty: Boolean(first.empty), text: first.text };
+  const first = await spawnOnce(scope, plan, node, results, parent, signal, undefined, undefined, sid, failedMap, prunedSet);
+  if (first.ok) {
+    const out = { ok: true, empty: Boolean(first.empty), text: first.text };
+    if (first.decision) out.decision = first.decision;
+    return out;
+  }
   if (!node.fallbackModel && !node.fallbackProvider) {
     const reason = first.reason || 'unknown';
     return { ok: false, empty: false, reason, text: first.text + '\n（失败原因：' + reason + '，未配置备用模型）' };
@@ -314,8 +551,12 @@ async function spawnNode(scope, plan, node, results, parent, signal, sid, failed
   const retry = await spawnOnce(scope, plan, node, results, parent, signal, {
     provider: node.fallbackProvider,
     model: node.fallbackModel,
-  }, undefined, sid, failedMap);
-  if (retry.ok) return { ok: true, empty: Boolean(retry.empty), text: retry.text + '\n（已用备用模型重试成功）' };
+  }, undefined, sid, failedMap, prunedSet);
+  if (retry.ok) {
+    const out = { ok: true, empty: Boolean(retry.empty), text: retry.text + '\n（已用备用模型重试成功）' };
+    if (retry.decision) out.decision = retry.decision;
+    return out;
+  }
   const reason = retry.reason || 'unknown';
   return { ok: false, empty: false, reason, text: retry.text + '\n（重试仍失败：' + reason + '）' };
 }
@@ -440,7 +681,7 @@ function normalizeCanvas(args) {
   for (const raw of rawNodes) {
     if (!raw || typeof raw !== 'object') continue;
     counter += 1;
-    const kind = raw.kind === 'lead' ? 'lead' : 'agent';
+    const kind = normalizeKind(raw.kind);
     const wantsEntry = !hasExplicitLead && (raw.id === 'lead' || (raw.entry === true && kind === 'lead'));
     let id = wantsEntry
       ? 'lead'
@@ -452,8 +693,11 @@ function normalizeCanvas(args) {
     }
     usedIds.add(id);
     if (id === 'lead') hasExplicitLead = true;
-    const label = String(raw.label || (kind === 'lead' ? 'Lead 步骤 ' + counter : 'Node ' + counter));
-    nodes.push({
+    const defaultLabel = kind === 'lead'
+      ? 'Lead 步骤 ' + counter
+      : (kind === 'condition' ? '条件判断 ' + counter : 'Node ' + counter);
+    const label = String(raw.label || defaultLabel);
+    const nodeObj = {
       id,
       kind: id === 'lead' ? 'lead' : kind,
       label,
@@ -469,7 +713,13 @@ function normalizeCanvas(args) {
       fallbackProvider: String(raw.fallbackProvider || ''),
       x: 0,
       y: 0,
-    });
+    };
+    if (nodeObj.kind === 'condition') {
+      const customBranches = normalizeBranches(raw.branches);
+      if (customBranches) nodeObj.branches = customBranches;
+      if (raw.multiMatch === true) nodeObj.multiMatch = true;
+    }
+    nodes.push(nodeObj);
     if (raw.ref && !idByRef.has(String(raw.ref))) idByRef.set(String(raw.ref), id);
     if (raw.id && !idByRef.has(String(raw.id))) idByRef.set(String(raw.id), id);
     idByRef.set(id, id);
@@ -484,7 +734,10 @@ function normalizeCanvas(args) {
     const to = idByRef.get(String(raw.to)) || String(raw.to);
     if ((from !== 'lead' && !ids.has(from)) || !ids.has(to) || from === to || to === 'lead') continue;
     const type = ['prompt', 'structured', 'session-ref'].includes(raw.type) ? raw.type : 'prompt';
-    edges.push({ id: 'e' + edges.length, from, to, type });
+    const branch = normalizeBranch(raw.branch);
+    const edgeObj = { id: 'e' + edges.length, from, to, type };
+    if (branch) edgeObj.branch = branch;
+    edges.push(edgeObj);
   }
 
   let entry = nodes.find((n) => n.id === 'lead');
@@ -580,11 +833,21 @@ function applyPatch(plan, args) {
       for (const key of ALLOWED) {
         if (patch[key] !== undefined) existing[key] = patch[key];
       }
+      if (patch.kind !== undefined) existing.kind = normalizeKind(patch.kind);
+      if (patch.branches !== undefined) {
+        const nb = normalizeBranches(patch.branches);
+        if (nb) existing.branches = nb;
+        else delete existing.branches;
+      }
+      if (patch.multiMatch !== undefined) {
+        if (patch.multiMatch) existing.multiMatch = true;
+        else delete existing.multiMatch;
+      }
       touched.push(patch.id);
     } else {
       const created = {
         id: patch.id,
-        kind: patch.kind === 'lead' ? 'lead' : 'agent',
+        kind: normalizeKind(patch.kind),
         label: patch.label || patch.id,
         role: '', provider: '', model: '', reasoning: '', preset: 'standard',
         structured: false, keepSession: false, fallbackModel: '', fallbackProvider: '',
@@ -593,6 +856,13 @@ function applyPatch(plan, args) {
         if (patch[key] !== undefined) created[key] = patch[key];
       }
       created.preset = created.preset === 'minimal' ? 'minimal' : 'standard';
+      if (created.kind === 'condition' && patch.branches !== undefined) {
+        const nb = normalizeBranches(patch.branches);
+        if (nb) created.branches = nb;
+      }
+      if (created.kind === 'condition' && patch.multiMatch === true) {
+        created.multiMatch = true;
+      }
       nodes.push(created);
       byId.set(created.id, created);
       touched.push(created.id);
@@ -603,10 +873,13 @@ function applyPatch(plan, args) {
   const keptNodes = nodes.filter((n) => !removed.has(n.id));
   const keptIds = new Set(keptNodes.map((n) => n.id));
   const rawRemoveEdges = Array.isArray(args && args.removeEdges) ? args.removeEdges : [];
-  const matchesRemovedEdge = (edge) => rawRemoveEdges.some((r) => r
-    && String(r.from) === edge.from
-    && String(r.to) === edge.to
-    && (!r.type || r.type === edge.type));
+  const matchesRemovedEdge = (edge) => rawRemoveEdges.some((r) => {
+    if (!r || String(r.from) !== edge.from || String(r.to) !== edge.to) return false;
+    if (r.type && r.type !== edge.type) return false;
+    const rb = normalizeBranch(r.branch);
+    if (rb && rb !== normalizeBranch(edge.branch)) return false;
+    return true;
+  });
   let edges = (Array.isArray(plan.edges) ? plan.edges : [])
     .filter((e) => !matchesRemovedEdge(e) && !removed.has(e.from) && !removed.has(e.to))
     .map((e) => ({ ...e }));
@@ -617,8 +890,11 @@ function applyPatch(plan, args) {
     const validTo = keptIds.has(edge.to);
     if (!validFrom || !validTo) continue;
     const type = ['prompt', 'structured', 'session-ref'].includes(edge.type) ? edge.type : 'prompt';
-    if (edges.some((e) => e.from === edge.from && e.to === edge.to && e.type === type)) continue;
-    edges.push({ from: edge.from, to: edge.to, type });
+    const branch = normalizeBranch(edge.branch);
+    if (edges.some((e) => e.from === edge.from && e.to === edge.to && e.type === type && normalizeBranch(e.branch) === branch)) continue;
+    const nextEdge = { from: edge.from, to: edge.to, type };
+    if (branch) nextEdge.branch = branch;
+    edges.push(nextEdge);
   }
   const structuredSources = new Set(edges.filter((e) => e.type === 'structured').map((e) => e.from));
   for (const node of keptNodes) {
@@ -633,7 +909,13 @@ function applyPatch(plan, args) {
     removed: Array.from(removed),
     removeEdges: rawRemoveEdges
       .filter((r) => r && typeof r.from === 'string' && typeof r.to === 'string')
-      .map((r) => (r.type ? { from: r.from, to: r.to, type: r.type } : { from: r.from, to: r.to })),
+      .map((r) => {
+        const item = { from: r.from, to: r.to };
+        if (r.type) item.type = r.type;
+        const rb = normalizeBranch(r.branch);
+        if (rb) item.branch = rb;
+        return item;
+      }),
   };
 }
 
@@ -680,25 +962,38 @@ function inspectPlan(sid) {
     };
   }
   const plan = payload.plan || {};
-  const nodes = withoutEntry(plan.nodes).map((n) => ({
-    id: String(n.id || ''),
-    kind: n.kind === 'lead' ? 'lead' : 'agent',
-    label: String(n.label || n.id || ''),
-    role: String(n.role || ''),
-    provider: String(n.provider || ''),
-    model: String(n.model || ''),
-    reasoning: String(n.reasoning || ''),
-    preset: n.preset === 'minimal' ? 'minimal' : 'standard',
-    keepSession: Boolean(n.keepSession),
-    structured: Boolean(n.structured),
-    fallbackModel: String(n.fallbackModel || ''),
-    fallbackProvider: String(n.fallbackProvider || ''),
-  }));
-  const edges = Array.isArray(plan.edges) ? plan.edges.map((e) => ({
-    from: String(e.from || ''),
-    to: String(e.to || ''),
-    type: String(e.type || 'prompt'),
-  })) : [];
+  const nodes = withoutEntry(plan.nodes).map((n) => {
+    const item = {
+      id: String(n.id || ''),
+      kind: normalizeKind(n.kind),
+      label: String(n.label || n.id || ''),
+      role: String(n.role || ''),
+      provider: String(n.provider || ''),
+      model: String(n.model || ''),
+      reasoning: String(n.reasoning || ''),
+      preset: n.preset === 'minimal' ? 'minimal' : 'standard',
+      keepSession: Boolean(n.keepSession),
+      structured: Boolean(n.structured),
+      fallbackModel: String(n.fallbackModel || ''),
+      fallbackProvider: String(n.fallbackProvider || ''),
+    };
+    if (item.kind === 'condition') {
+      const nb = normalizeBranches(n.branches);
+      if (nb) item.branches = nb;
+      if (n.multiMatch) item.multiMatch = true;
+    }
+    return item;
+  });
+  const edges = Array.isArray(plan.edges) ? plan.edges.map((e) => {
+    const out = {
+      from: String(e.from || ''),
+      to: String(e.to || ''),
+      type: String(e.type || 'prompt'),
+    };
+    const branch = normalizeBranch(e.branch);
+    if (branch) out.branch = branch;
+    return out;
+  }) : [];
   const out = {
     hasCanvas: true,
     enabled: Boolean(payload.enabled),
@@ -749,7 +1044,7 @@ function buildActiveCanvasContext(sid) {
 
   const preview = nodes
     .slice(0, 8)
-    .map((n) => (n.kind === 'lead' ? '〔Lead〕' : '') + (n.label || n.id))
+    .map((n) => (n.kind === 'lead' ? '〔Lead〕' : (n.kind === 'condition' ? '〔条件〕' : '')) + (n.label || n.id))
     .join(' → ') + (nodes.length > 8 ? ' …' : '');
   const hasTask = Boolean(String((plan && plan.task) || '').trim());
   const prefix = String(sid) + '::';
@@ -858,6 +1153,10 @@ async function executePlan(scope, plan, args, exec) {
         labels: { ...(base.labels || {}) },
         failed: { ...(base.failed || {}) },
         emptyOutputs: { ...(base.emptyOutputs || {}) },
+        blockedEdges: new Set(Array.from(base.blockedEdges || [])),
+        pruned: new Set(Array.from(base.pruned || []).filter((id) => byId.has(id))),
+        decisions: { ...(base.decisions || {}) },
+        fallbackLinks: Array.isArray(base.fallbackLinks) ? base.fallbackLinks.map((fl) => ({ ...fl })) : [],
         waitingLead: null,
       };
       // Build forward adjacency to invalidate seed nodes and all their downstream dependents.
@@ -889,21 +1188,43 @@ async function executePlan(scope, plan, args, exec) {
       }
       for (const id of invalid) {
         state.done.delete(id);
+        state.pruned.delete(id);
         delete state.results[id];
         delete state.labels[id];
         delete state.failed[id];
         delete state.emptyOutputs[id];
+        delete state.decisions[id];
       }
-      reused = Array.from(state.done).map((id) => labelOf.get(id) || id);
+      for (const e of plan.edges || []) {
+        if (e && invalid.has(e.from)) state.blockedEdges.delete(edgeKey(e));
+      }
+      state.fallbackLinks = state.fallbackLinks.filter((fl) => !invalid.has(fl.from) && !invalid.has(fl.to));
+      reused = Array.from(state.done).filter((id) => !state.pruned.has(id)).map((id) => labelOf.get(id) || id);
       runBySession.set(sid, state);
     }
   }
 
   if (!state || state.sig !== sig) {
-    state = { sig, done: new Set(), results: {}, labels: {}, failed: {}, emptyOutputs: {}, waitingLead: null };
+    state = {
+      sig,
+      done: new Set(),
+      results: {},
+      labels: {},
+      failed: {},
+      emptyOutputs: {},
+      blockedEdges: new Set(),
+      pruned: new Set(),
+      decisions: {},
+      fallbackLinks: [],
+      waitingLead: null,
+    };
     runBySession.set(sid, state);
   }
   if (!state.emptyOutputs) state.emptyOutputs = {};
+  if (!state.blockedEdges) state.blockedEdges = new Set();
+  if (!state.pruned) state.pruned = new Set();
+  if (!state.decisions) state.decisions = {};
+  if (!state.fallbackLinks) state.fallbackLinks = [];
 
   const snapshotLastRun = (haltedFlag) => {
     if (!sid) return;
@@ -914,13 +1235,150 @@ async function executePlan(scope, plan, args, exec) {
       labels: { ...state.labels },
       failed: { ...state.failed },
       emptyOutputs: { ...state.emptyOutputs },
+      blockedEdges: new Set(state.blockedEdges),
+      pruned: new Set(state.pruned),
+      decisions: { ...state.decisions },
+      fallbackLinks: state.fallbackLinks.map((fl) => ({ ...fl })),
       halted: Boolean(haltedFlag),
     });
   };
-  const depsOf = (node) => (plan.edges || [])
-    .filter((e) => e.to === node.id && e.from !== 'lead')
-    .map((e) => e.from)
-    .filter((id) => byId.has(id));
+  const depsOf = (node) => {
+    const out = new Set();
+    for (const e of plan.edges || []) {
+      if (e.to === node.id
+        && e.from !== 'lead'
+        && !state.blockedEdges.has(edgeKey(e))
+        && !state.pruned.has(e.from)
+        && byId.has(e.from)) {
+        out.add(e.from);
+      }
+    }
+    for (const fl of state.fallbackLinks || []) {
+      if (fl.to === node.id && byId.has(fl.from)) out.add(fl.from);
+    }
+    return Array.from(out);
+  };
+  const nearestDownstreamLead = (startId) => {
+    const fwd = new Map();
+    for (const e of plan.edges || []) {
+      if (!e || !e.from || !e.to) continue;
+      if (!fwd.has(e.from)) fwd.set(e.from, []);
+      fwd.get(e.from).push(e.to);
+    }
+    const seen = new Set([startId]);
+    const queue = [startId];
+    for (let i = 0; i < queue.length; i += 1) {
+      const cur = queue[i];
+      for (const next of fwd.get(cur) || []) {
+        if (seen.has(next)) continue;
+        seen.add(next);
+        const candidate = byId.get(next);
+        if (candidate && candidate.kind === 'lead' && !state.done.has(candidate.id)) {
+          return candidate;
+        }
+        queue.push(next);
+      }
+    }
+    return null;
+  };
+  const branchSkippedList = () => Array.from(state.pruned).map((id) => labelOf.get(id) || id);
+  const ancestorsOf = (targetId) => {
+    const parents = new Map();
+    for (const e of plan.edges || []) {
+      if (!e || !e.from || !e.to) continue;
+      if (!parents.has(e.to)) parents.set(e.to, []);
+      parents.get(e.to).push(e.from);
+    }
+    const seen = new Set();
+    const stack = [targetId];
+    while (stack.length) {
+      const cur = stack.pop();
+      for (const p of parents.get(cur) || []) {
+        if (!seen.has(p)) { seen.add(p); stack.push(p); }
+      }
+    }
+    return seen;
+  };
+  const recomputeBranchPrune = () => {
+    // Re-evaluate reachability from entry Lead over non-blocked edges so diamond
+    // convergence nodes stay active, while side-channel edges from ancestors of a
+    // condition node (e.g. A --session-ref--> N) cannot bypass a blocked branch gate.
+    const condAncestors = new Map();
+    const blockedSources = new Map();
+    for (const e of plan.edges || []) {
+      if (!e || !e.from || !e.to) continue;
+      if (!state.blockedEdges.has(edgeKey(e))) continue;
+      if (!blockedSources.has(e.to)) blockedSources.set(e.to, new Set());
+      blockedSources.get(e.to).add(e.from);
+      if (!condAncestors.has(e.from)) condAncestors.set(e.from, ancestorsOf(e.from));
+    }
+
+    const gatedBy = new Map();
+    const addGates = (nodeId, condIds) => {
+      if (!gatedBy.has(nodeId)) gatedBy.set(nodeId, new Set());
+      const set = gatedBy.get(nodeId);
+      for (const c of condIds) set.add(c);
+    };
+    for (const [toId, cSet] of blockedSources.entries()) addGates(toId, cSet);
+
+    const isBypassEdge = (e) => {
+      const directGates = blockedSources.get(e.to);
+      if (directGates) {
+        for (const cId of directGates) {
+          if ((condAncestors.get(cId) || new Set()).has(e.from)) return true;
+        }
+      }
+      if (e.type === 'session-ref') {
+        const inherited = gatedBy.get(e.to);
+        if (inherited) {
+          for (const cId of inherited) {
+            if ((condAncestors.get(cId) || new Set()).has(e.from)) return true;
+          }
+        }
+      }
+      return false;
+    };
+
+    for (let pass = 0; pass <= runnable.length; pass += 1) {
+      const adj = new Map();
+      for (const e of plan.edges || []) {
+        if (!e || !e.from || !e.to) continue;
+        if (state.blockedEdges.has(edgeKey(e))) continue;
+        if (state.pruned.has(e.from)) continue;
+        if (isBypassEdge(e)) continue;
+        if (!adj.has(e.from)) adj.set(e.from, []);
+        adj.get(e.from).push(e.to);
+      }
+      for (const fl of state.fallbackLinks || []) {
+        if (!fl || !fl.from || !fl.to || state.pruned.has(fl.from)) continue;
+        if (!adj.has(fl.from)) adj.set(fl.from, []);
+        adj.get(fl.from).push(fl.to);
+      }
+      const active = new Set(['lead']);
+      const queue = ['lead'];
+      for (let i = 0; i < queue.length; i += 1) {
+        const cur = queue[i];
+        for (const next of adj.get(cur) || []) {
+          if (!active.has(next)) { active.add(next); queue.push(next); }
+        }
+      }
+      let addedAny = false;
+      for (const n of runnable) {
+        if (!state.done.has(n.id) && !inFlight.has(n.id) && !active.has(n.id)) {
+          state.pruned.add(n.id);
+          state.done.add(n.id);
+          addedAny = true;
+          const gates = gatedBy.get(n.id);
+          if (gates && gates.size) {
+            for (const e of plan.edges || []) {
+              if (e && e.from === n.id && e.to) addGates(e.to, gates);
+            }
+          }
+        }
+      }
+      if (!addedAny) break;
+    }
+  };
 
   let leadResult = typeof opts.leadResult === 'string' ? opts.leadResult : undefined;
   const rawMaxParallel = opts.maxParallel !== undefined ? opts.maxParallel : plan.maxParallel;
@@ -944,7 +1402,7 @@ async function executePlan(scope, plan, args, exec) {
       && depsOf(n).every((id) => state.done.has(id)));
     for (const node of candidates) {
       if (isAborted() || haltedReason || inFlight.size >= MAX_PARALLEL) break;
-      const promise = spawnNode(scope, plan, node, state.results, agent, exec.signal, sid, state.failed)
+      const promise = spawnNode(scope, plan, node, state.results, agent, exec.signal, sid, state.failed, state.pruned)
         .then(
           (outcome) => ({ node, outcome }),
           (err) => ({ node, outcome: { ok: false, reason: 'run-failed', text: '运行失败：' + String((err && err.message) || err) } }),
@@ -972,6 +1430,8 @@ async function executePlan(scope, plan, args, exec) {
         labels: state.labels,
         failed: Object.values(state.failed),
         emptyOutputs: Object.values(state.emptyOutputs),
+        decisions: Object.values(state.decisions),
+        branchSkipped: branchSkippedList(),
         reused,
         skipped,
       };
@@ -987,6 +1447,8 @@ async function executePlan(scope, plan, args, exec) {
         labels: state.labels,
         failed: Object.values(state.failed),
         emptyOutputs: Object.values(state.emptyOutputs),
+        decisions: Object.values(state.decisions),
+        branchSkipped: branchSkippedList(),
         reused,
         skipped,
       };
@@ -1001,19 +1463,107 @@ async function executePlan(scope, plan, args, exec) {
         if (sid) runBySession.delete(sid);
         return { error: '工作流执行已取消。' };
       }
-      state.results[node.id] = outcome.text;
       state.labels[node.id] = node.label;
+      if (node.kind === 'condition') {
+        const { branches, isDefaultBinary } = conditionBranches(node);
+        if (!outcome.ok) {
+          const failReason = outcome.reason || 'unknown';
+          state.failed[node.id] = { id: node.id, label: node.label, reason: failReason };
+          state.decisions[node.id] = {
+            id: node.id,
+            label: node.label,
+            branches: [],
+            branchLabels: [],
+            branch: '',
+            branchLabel: '',
+            pass: false,
+            failed: true,
+            reason: outcome.text || ('运行失败：' + failReason),
+          };
+          state.results[node.id] = '【条件节点自身执行失败：' + failReason + '】' + (outcome.text ? ' ' + outcome.text : '');
+          state.done.add(node.id);
+          // Never guess a branch when the judge itself crashed: block all outgoing branches.
+          for (const e of plan.edges || []) {
+            if (e && e.from === node.id) state.blockedEdges.add(edgeKey(e));
+          }
+          const fallbackLead = nearestDownstreamLead(node.id);
+          if (fallbackLead) {
+            state.fallbackLinks.push({ from: node.id, to: fallbackLead.id, label: node.label, failed: true, reason: failReason });
+            state.decisions[node.id].fallbackLead = fallbackLead.label;
+            state.results[node.id] += '（未擅自选择分支，已直接转交至最近 Lead「' + fallbackLead.label + '」）';
+            recomputeBranchPrune();
+          } else {
+            recomputeBranchPrune();
+            haltedReason = '条件节点「' + node.label + '」自身执行失败（' + failReason
+              + '），为避免误走分支已停止下游执行。';
+          }
+          continue;
+        }
+        const fallbackBranch = branches[0];
+        const dec = outcome.decision || {
+          branches: [fallbackBranch.id],
+          branchLabels: [fallbackBranch.label],
+          branch: fallbackBranch.id,
+          branchLabel: fallbackBranch.label,
+          pass: isDefaultBinary ? fallbackBranch.id === 'true' : true,
+          reason: outcome.text || '',
+        };
+        const matchedIds = Array.isArray(dec.branches) ? dec.branches : (dec.branch ? [dec.branch] : []);
+        const matchedLabels = Array.isArray(dec.branchLabels) ? dec.branchLabels : (dec.branchLabel ? [dec.branchLabel] : matchedIds);
+        const pass = Boolean(dec.pass);
+        const reason = dec.reason || '';
+        state.decisions[node.id] = {
+          id: node.id,
+          label: node.label,
+          branches: matchedIds,
+          branchLabels: matchedLabels,
+          branch: matchedIds[0] || '',
+          branchLabel: matchedLabels[0] || '',
+          pass,
+          reason,
+        };
+        state.results[node.id] = (matchedIds.length === 0
+          ? '【条件判断：未命中任何分支】'
+          : (isDefaultBinary
+            ? (pass ? '【条件判断：是 / 通过】' : '【条件判断：否 / 未通过】')
+            : ('【条件分支：' + matchedLabels.join('、') + '】')))
+          + (reason ? ' ' + reason : '');
+        state.done.add(node.id);
+        const matchedSet = new Set(matchedIds);
+        for (const e of plan.edges || []) {
+          if (!e || e.from !== node.id) continue;
+          const edgeBranch = normalizeBranch(e.branch) || branches[0].id;
+          if (!matchedSet.has(edgeBranch)) state.blockedEdges.add(edgeKey(e));
+        }
+        if (matchedIds.length === 0) {
+          // When no condition branch matched, skip intermediate subagent branches
+          // and jump directly to the nearest downstream Lead so the user/Lead is notified.
+          const fallbackLead = nearestDownstreamLead(node.id);
+          if (fallbackLead) {
+            state.fallbackLinks.push({ from: node.id, to: fallbackLead.id, label: node.label });
+            state.decisions[node.id].fallbackLead = fallbackLead.label;
+            state.results[node.id] += '（已跳过中间分支，直接转交至最近 Lead「' + fallbackLead.label + '」）';
+          }
+        }
+        recomputeBranchPrune();
+        continue;
+      }
+      state.results[node.id] = outcome.text;
       if (!outcome.ok) {
         state.failed[node.id] = { id: node.id, label: node.label, reason: outcome.reason || 'unknown' };
         if (outcome.reason === 'activation-failed') activationFailCount += 1;
       } else if (outcome.empty) {
         state.emptyOutputs[node.id] = { id: node.id, label: node.label };
       }
-      if (isPermissionFailure(outcome)) {
+      // If a failing node feeds a condition node, let the condition handle failure routing
+      // instead of circuit-breaking the whole run prematurely.
+      const routesToCondition = (plan.edges || []).some((e) => e && e.from === node.id
+        && byId.get(e.to) && byId.get(e.to).kind === 'condition');
+      if (!routesToCondition && isPermissionFailure(outcome)) {
         permBlocked.push(node.label || node.id);
         haltedReason = '检测到权限/沙箱受限导致节点失败（' + permBlocked.join('、')
           + '），已熔断停止启动后续节点以防继续消耗额度。请先检查主对话左下角权限模式，放开后重新运行。';
-      } else if (activationFailCount >= 2 && !haltedReason) {
+      } else if (!routesToCondition && activationFailCount >= 2 && !haltedReason) {
         haltedReason = '连续 ' + activationFailCount + ' 个子代理启动失败，已熔断停止后续节点以防继续消耗额度。请检查模型配置或主对话权限后重试。';
       }
       state.done.add(node.id);
@@ -1033,6 +1583,17 @@ async function executePlan(scope, plan, args, exec) {
           || childByNode.get(String(sid || '') + '::' + id)
           || null,
       }));
+    const jumpedEntries = (state.fallbackLinks || []).filter((fl) => fl.to === leadNode.id);
+    const failedConds = jumpedEntries.filter((fl) => fl.failed).map((fl) => (fl.label || labelOf.get(fl.from) || fl.from) + '（' + (fl.reason || 'unknown') + '）');
+    const unmatchedConds = jumpedEntries.filter((fl) => !fl.failed).map((fl) => fl.label || labelOf.get(fl.from) || fl.from);
+    const fallbackParts = [];
+    if (failedConds.length) {
+      fallbackParts.push('⚠ 条件节点（' + failedConds.join('、') + '）自身执行失败，未擅自选择分支，已跳过中间分支直接转交给你处理；也可调用 canvas_workflow({ retryFailed: true }) 复用上游缓存并只重跑该条件节点及其下游。');
+    }
+    if (unmatchedConds.length) {
+      fallbackParts.push('⚠ 条件节点（' + unmatchedConds.join('、') + '）所有分支均未命中，已跳过中间分支直接转交给你处理。');
+    }
+    const fallbackNotice = fallbackParts.join(' ');
     const hasDownstreamWork = remaining.some((n) => n.id !== leadNode.id);
     if (!hasDownstreamWork && leadResult === undefined) {
       // Terminal Lead: zero downstream nodes remain, so complete the run directly
@@ -1051,10 +1612,13 @@ async function executePlan(scope, plan, args, exec) {
         labels: state.labels,
         failed: Object.values(state.failed),
         emptyOutputs: Object.values(state.emptyOutputs),
+        decisions: Object.values(state.decisions),
+        branchSkipped: branchSkippedList(),
         sessions: leadSessions,
         reused,
         skipped,
-        hint: '所有子代理已完成。最后一步由你（Lead 本体）按要求完成终审/汇总后直接向用户交付即可，无需再次调用 canvas_workflow。',
+        hint: (fallbackNotice ? fallbackNotice + ' ' : '')
+          + '所有子代理已完成。最后一步由你（Lead 本体）按要求完成终审/汇总后直接向用户交付即可，无需再次调用 canvas_workflow。',
       };
     }
     if (leadResult === undefined) {
@@ -1074,8 +1638,11 @@ async function executePlan(scope, plan, args, exec) {
         labels: state.labels,
         failed: Object.values(state.failed),
         emptyOutputs: Object.values(state.emptyOutputs),
+        decisions: Object.values(state.decisions),
+        branchSkipped: branchSkippedList(),
         sessions: leadSessions,
-        hint: '这一步由你（Lead 本体）完成。完成后再次调用本工具，把结果放进 leadResult 继续；若需从头重跑可传 reset: true。',
+        hint: (fallbackNotice ? fallbackNotice + ' ' : '')
+          + '这一步由你（Lead 本体）完成。完成后再次调用本工具，把结果放进 leadResult 继续；若需从头重跑可传 reset: true。',
       };
     }
     state.waitingLead = null;
@@ -1199,7 +1766,7 @@ export function apply(ctx) {
                     id: { type: 'string' },
                     ref: { type: 'string', description: 'Temporary handle for edges; the tool assigns the real id.' },
                     entry: { type: 'boolean', description: 'Optional: set true only if customizing the entry Lead node itself.' },
-                    kind: { type: 'string', enum: ['agent', 'lead'] },
+                    kind: { type: 'string', enum: ['agent', 'lead', 'condition'] },
                     label: { type: 'string' },
                     role: { type: 'string' },
                     task: { type: 'string' },
@@ -1211,6 +1778,15 @@ export function apply(ctx) {
                     keepSession: { type: 'boolean' },
                     fallbackModel: { type: 'string' },
                     fallbackProvider: { type: 'string' },
+                    branches: {
+                      type: 'array',
+                      description: 'Optional (condition nodes only): custom switch/case branch names (strings or { id, label }, 2 or more). Omit for default true/false.',
+                      items: {},
+                    },
+                    multiMatch: {
+                      type: 'boolean',
+                      description: 'Optional (condition nodes only): true to allow matching multiple branches in parallel; false (default) picks at most 1 branch (or none if unmatched).',
+                    },
                   },
                 },
               },
@@ -1222,6 +1798,7 @@ export function apply(ctx) {
                     from: { type: 'string' },
                     to: { type: 'string' },
                     type: { type: 'string', enum: ['prompt', 'structured', 'session-ref'] },
+                    branch: { type: 'string', description: 'For edges leaving a condition node: "true" / "false" (default binary) or one of the condition node branch ids.' },
                   },
                   required: ['from', 'to'],
                 },
@@ -1245,7 +1822,9 @@ export function apply(ctx) {
               const canvas = v.canvas || {};
               const nodes = Array.isArray(canvas.nodes) ? canvas.nodes : [];
               const edges = Array.isArray(canvas.edges) ? canvas.edges : [];
-              const lines = nodes.map((n) => '- [' + n.id + '] ' + (n.kind === 'lead' ? '〔Lead〕' : '') + n.label
+              const lines = nodes.map((n) => '- [' + n.id + '] '
+                + (n.kind === 'lead' ? '〔Lead〕' : (n.kind === 'condition' ? '〔条件〕' : ''))
+                + n.label
                 + (n.role ? '：' + n.role : ''));
               const warnBlock = Array.isArray(v.warnings) && v.warnings.length
                 ? '\n\n⚠ 结构提示：\n' + v.warnings.map((w) => '- ' + w).join('\n')
@@ -1407,6 +1986,12 @@ export function apply(ctx) {
               const nodeLines = (v.nodes || []).map((n) => {
                 const flags = [];
                 if (n.kind === 'lead') flags.push('Lead');
+                if (n.kind === 'condition') {
+                  flags.push('条件' + (Array.isArray(n.branches) && n.branches.length >= 2
+                    ? ':' + n.branches.map((b) => b.label || b.id).join('/')
+                    : ''));
+                  if (n.multiMatch) flags.push('多选');
+                }
                 if (n.model) flags.push(n.model);
                 if (n.reasoning) flags.push('reasoning=' + n.reasoning);
                 if (n.preset === 'minimal') flags.push('minimal');
@@ -1416,7 +2001,8 @@ export function apply(ctx) {
                   + (flags.length ? ' (' + flags.join(', ') + ')' : '')
                   + (n.role ? '：' + n.role : '');
               });
-              const edgeLines = (v.edges || []).map((e) => '- ' + e.from + ' --(' + e.type + ')--> ' + e.to);
+              const edgeLines = (v.edges || []).map((e) => '- ' + e.from
+                + ' --(' + e.type + (e.branch ? ':' + e.branch : '') + ')--> ' + e.to);
               return [{
                 type: 'text',
                 text: head.join('\n')
@@ -1466,6 +2052,8 @@ export function apply(ctx) {
                 labels: { type: 'object' },
                 failed: { type: 'array' },
                 emptyOutputs: { type: 'array' },
+                decisions: { type: 'array' },
+                branchSkipped: { type: 'array' },
                 sessions: { type: 'array' },
                 reused: { type: 'array' },
                 skipped: { type: 'array' },
@@ -1490,6 +2078,26 @@ export function apply(ctx) {
                 ? '\n\n⚠ 未返回交付文本的节点（请核查其实际产物，切勿直接当作已完成）：'
                   + v.emptyOutputs.map((e) => e.label || e.id).join('、')
                 : '';
+              const decisionList = Array.isArray(v.decisions) && v.decisions.length
+                ? '\n\n条件分支判决：' + v.decisions.map((d) => {
+                  if (d.failed) {
+                    return (d.label || d.id) + ' → ⚠ 自身执行失败' + (d.reason ? '（' + d.reason + '）' : '');
+                  }
+                  const ids = Array.isArray(d.branches) ? d.branches : (d.branch ? [d.branch] : []);
+                  const labels = Array.isArray(d.branchLabels) ? d.branchLabels : (d.branchLabel ? [d.branchLabel] : ids);
+                  if (!ids.length) {
+                    return (d.label || d.id) + ' → 未命中任何分支' + (d.reason ? '（' + d.reason + '）' : '');
+                  }
+                  const isDefault = ids.length === 1
+                    && (ids[0] === 'true' || ids[0] === 'false')
+                    && (!labels[0] || labels[0] === '是' || labels[0] === '否' || labels[0] === 'Yes' || labels[0] === 'No');
+                  const chosen = isDefault ? (d.pass ? '✓ 是' : '✕ 否') : labels.join(' + ');
+                  return (d.label || d.id) + ' → ' + chosen + (d.reason ? '（' + d.reason + '）' : '');
+                }).join('；')
+                : '';
+              const branchSkipNote = Array.isArray(v.branchSkipped) && v.branchSkipped.length
+                ? '\n\n条件未命中已跳过：' + v.branchSkipped.join('、')
+                : '';
               if (v.status === 'need-lead') {
                 const n = v.node || {};
                 const handed = Array.isArray(v.sessions) ? v.sessions.filter((s) => s && s.childId) : [];
@@ -1501,10 +2109,12 @@ export function apply(ctx) {
                   type: 'text',
                   text: '需要你（Lead）完成「' + n.label + '」：' + n.role
                     + '\n需要用到：' + ((n.needs && n.needs.length) ? n.needs.join('、') : '（无上游）')
+                    + decisionList
                     + failedList
                     + emptyList
                     + '\n\n已完成节点的结果：\n' + body
                     + handover
+                    + branchSkipNote
                     + '\n\n' + (v.hint || ''),
                 }];
               }
@@ -1526,16 +2136,18 @@ export function apply(ctx) {
                     type: 'text',
                     text: '所有子代理已完成，现在进入终审 Lead 步骤「' + fl.label + '」：' + fl.role
                       + '\n需要用到：' + ((fl.needs && fl.needs.length) ? fl.needs.join('、') : '（无上游）')
+                      + decisionList
                       + failedList
                       + emptyList
                       + '\n\n已完成节点的结果：\n' + body
                       + handover
+                      + branchSkipNote
                       + reusedNote
                       + skip
                       + '\n\n' + (v.hint || ''),
                   }];
                 }
-                return [{ type: 'text', text: '画布执行完成。' + failedList + emptyList + '\n\n' + body + reusedNote + skip }];
+                return [{ type: 'text', text: '画布执行完成。' + decisionList + failedList + emptyList + '\n\n' + body + branchSkipNote + reusedNote + skip }];
               }
               return [{ type: 'text', text: JSON.stringify(v) }];
             },
@@ -1556,6 +2168,8 @@ export {
   upstreamOf,
   downstreamLabels,
   briefFor,
+  normalizeBranches,
+  parseConditionDecision,
   withoutEntry,
   analyzeCanvasWarnings,
   normalizeCanvas,

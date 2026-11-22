@@ -14,9 +14,17 @@ are performed by the conversation itself.
 - **Lead node** (blue top bar): performed by the conversation, never spawned. The
   entry node carries the overall task; intermediate Lead nodes pause for your
   decision, and a terminal Lead finishes in one shot without an extra callback.
-- **Sockets are typed** (`prompt` / `structured` / `session`); a link only joins
-  the same type (either direction), and cycles are blocked immediately. Drag a
-  connected input away to detach.
+- **Condition node** (amber top bar): lightweight read-only (`minimal`) branch
+  judge supporting inline-editable binary `if/else` (`Yes` / `No`), multi-way
+  `switch/case` (`+ Case`), and `Single` / `Multi` match modes (including clean
+  zero-match full skip when no branch applies). Unchosen paths are pruned
+  automatically without spawning, and branches can converge back into a shared
+  downstream node or terminal Lead.
+- **Typed outputs, universal input**: right-side output sockets pick the channel
+  (`prompt` / `structured` / `session` / condition branch); every non-entry node
+  exposes a single universal left input (`in`) that accepts any wire and inherits
+  the source colour. Cycles are blocked immediately; drag a connected input away
+  to detach its latest wire.
 - Inactive nodes (unreachable from entry, solo chained Leads with no subagent
   upstream, or dangling dead-end subagents) are drawn dashed and skipped at run time.
 - Wheel zooms around the cursor; middle-drag (or `Space` + drag) pans; `⊡ Fit`
@@ -47,13 +55,16 @@ node positions survive.
 
 ## Running
 
-Subagent nodes run in an event-driven concurrency pool (up to 4) via
-`canvas_workflow`, which supports `task` (override the entry task for template
-reuse), `reset: true` (discard a paused run), and `clearMemory: true` (forget
-saved `keepSession` memories). While enabled, a per-session runtime context
-notifies the agent automatically. Intermediate Lead nodes pause with
-`status: "need-lead"` and report `failed` / `emptyOutputs` plus `session`
-handovers; a terminal Lead completes directly with `status: "done"` and `finalLead`.
+Subagent nodes run in an event-driven concurrency pool (default 4, configurable
+1–8 via `⋯` or `maxParallel`) via `canvas_workflow`, which supports `task`
+(override the entry task for template reuse), `reset: true` (discard a paused
+run), `retryFailed: true` / `fromNodes` (reuse succeeded nodes and re-run only
+failed/target segments plus downstream), and `clearMemory: true` (forget saved
+`keepSession` memories). While enabled, a per-session runtime context notifies
+the agent automatically. Intermediate Lead nodes pause with `status: "need-lead"`
+and report `decisions` / `branchSkipped` / `failed` / `emptyOutputs` plus
+`session` handovers; a terminal Lead completes directly with `status: "done"`
+and `finalLead`.
 
 ## Memory
 

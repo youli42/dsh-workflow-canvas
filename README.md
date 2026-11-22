@@ -8,7 +8,8 @@ English | [中文](README.zh.md) | [Mechanism & Architecture](docs/MECHANISM.md)
 
 Turn multi-agent orchestration in DSH into a visual node graph: each card is an AI role, each wire defines who feeds whom, and pressing **● ON** lets you run the whole pipeline straight from chat.
 
-- **Real parallelism**: Independent nodes run concurrently (up to 4 at once), and newly unblocked downstream nodes start the instant their inputs finish.
+- **Real parallelism**: Independent nodes run concurrently (default 4, configurable 1–8 under `⋯`), and newly unblocked downstream nodes start the instant their inputs finish.
+- **Conditional branching**: Drop a **Condition** node anywhere to route downstream along `✓ Yes` or `✕ No` based on upstream results — the unchosen branch is skipped automatically without spawning.
 - **Human-in-the-loop**: Drop a **Lead** card anywhere in the flow to pause automatically for your decision before continuing.
 - **Zero black box**: Click any subagent card to open its live chat transcript and inspect its exact output.
 - **Don't want to draw by hand?** Describe the workflow in one sentence in chat — the agent sketches the graph for you and can patch it in place anytime.
@@ -31,13 +32,14 @@ Once enabled, open the **`Workflow`** tab in the right sidebar.
 
 ### 1. Node types
 
-There are three node types on the canvas:
+There are four node types on the canvas (Entry Lead, Subagent, Lead, Condition):
 
 | Node | Description |
 |---|---|
 | <img src="docs/images/node-entry-en.png" width="220" alt="Entry Lead node" /> | **Entry Lead (start node, always present)**<br>• The starting point of the graph — **right-side output sockets only**.<br>• Write the overall goal in **Task**, or leave it blank and send your prompt directly in chat once the canvas is **● ON**.<br>• Every node that should run must be reachable from here. |
-| <img src="docs/images/node-subagent-en.png" width="220" alt="Subagent node" /> | **Subagent (green top bar — runs in an isolated child session)**<br>• **Model / Reasoning**: Configure model and reasoning effort per node.<br>• **Scope**: `standard` (all tools) or `minimal` (read-only thinking — disables file edits and web), bounded by the main chat's permission mode.<br>• **Fallback**: Automatically retries once on another model if the primary one fails.<br>• **Memory**: Flip **on** and use the dropdown beside it to resume **Latest** or pin any past run (`#1 / #2`).<br>• **Role**: Click the pencil icon to describe what this node is responsible for. |
+| <img src="docs/images/node-subagent-en.png" width="220" alt="Subagent node" /> | **Subagent (green top bar — runs in an isolated child session)**<br>• **Model / Reasoning**: Configure model and reasoning effort per node.<br>• **Scope**: `standard` (all tools) or `minimal` (read-only thinking — disables file edits and web), bounded by the main chat's permission mode.<br>• **Fallback**: Automatically retries once on another model if the primary one fails.<br>• **Memory**: Flip **on** to enable the session dropdown beside it (**Latest** or pin any past run `#1 / #2`; muted when off).<br>• **Role**: Edit inline or click `⤢` to open a larger editor. |
 | <img src="docs/images/node-lead-en.png" width="220" alt="Lead node" /> | **Lead (blue top bar — runs directly in the main conversation)**<br>• **Never spawned** — handled by your main chat itself.<br>• **Mid-flow** (e.g. `Lead Pick`): pauses with `⏸ Ready` once upstream finishes so you can decide before downstream starts.<br>• **End-of-flow** (e.g. `Lead Review`): delivers the final summary in one shot without an extra round-trip.<br>• Requires at least one subagent upstream (solo Lead-to-Lead nodes render dashed and are skipped). |
+| **Condition (amber top bar)** | **Condition (lightweight read-only judge — `if/else`, `switch/case` & parallel multi-match)**<br>• Runs as a dedicated lightweight read-only subagent with **Model / Reasoning / Fallback** controls; both the overall rule and every individual branch have a `⤢` button to open a larger editor.<br>• Starts with inline editable **`Yes` / `No`** branches; click **`+ Case`** to add more named branches freely (e.g. `Pass / Minor Fix / Rewrite / Other`).<br>• Toggle **`Single`** (pick at most 1 best match) vs **`Multi`** (run all matching branches in parallel); if none match or the condition node itself fails, it never guesses a branch — it skips intermediate branches and hands off to the nearest downstream Lead (or halts cleanly for `retryFailed: true`). |
 
 Load a built-in template from **`☰ Presets`**, or press **`Shift+A`** anywhere on the canvas to add a node (`⋯` also provides `⊞ Auto layout` and `✕ Clear canvas`):
 
@@ -47,9 +49,9 @@ Load a built-in template from **`☰ Presets`**, or press **`Shift+A`** anywhere
 
 ### 2. Links and data flow
 
-**Drag from a right-side output socket on an upstream node to a left-side input socket on a downstream node** to pass results forward.
+**Drag from a right-side output socket on an upstream node to the universal left input (`in`) on a downstream node** to pass results forward — every non-entry node has a single universal input that automatically inherits the wire type and colour from its source output.
 
-Socket colour indicates the channel type — **only matching colours connect**:
+Output socket colour indicates the channel type:
 | Colour | Type | Description |
 |---|---|---|
 | Grey | `prompt` | Passes plain-text output downstream |
@@ -89,7 +91,7 @@ Press **`● ON`** at the top-left of the canvas, then send your task in chat (w
 
 ### 5. Inspect live subagent runs
 
-Active nodes glow blue with animated flow wires and turn green when done. **Click the status badge (`Running ↗` / `Done ↗`) at the bottom-right of any subagent node** to open its conversation pane:
+Active nodes glow blue with animated flow wires and turn green when done. **Click the status badge (`Running ↗` / `Done ↗`) at the bottom-left of any subagent node** to open its conversation pane:
 
 ![Parallel execution and clicking straight into a subagent chat](docs/images/parallel-and-inspect.gif)
 
@@ -104,7 +106,7 @@ Active nodes glow blue with animated flow wires and turn green when done. **Clic
 
 | Control / Shortcut | Action |
 |---|---|
-| `Shift+A` | Add a node at the cursor (`1` = Subagent, `2` = Lead) |
+| `Shift+A` | Add a node at the cursor (`1` = Subagent, `2` = Lead, `3` = Condition) |
 | Middle-drag / `Space` + left-drag | Pan the canvas |
 | Wheel / `⊡ Fit` / `100%` pill | Zoom around cursor / fit all nodes / click to reset 100%, drag left-right to scrub zoom |
 | Marquee drag + `Ctrl+D` / `Delete` | Multi-select move, duplicate (with settings), or batch delete |
@@ -114,9 +116,10 @@ Active nodes glow blue with animated flow wires and turn green when done. **Clic
 
 ## Presets, sharing & limits
 
-- **Presets & sharing**: `☰ Presets` includes 3 starter templates plus **New blank canvas**; save your own with `☆ Save`. Custom presets live in browser storage — use `⋯ → ⇧ Copy JSON` and `⇩ Import` to share across devices.
-- **How this differs from other canvas plugins**: Built for **multi-subagent orchestration + conversation Lead gates**; for `ctx.workflows` tool/condition pipelines, see [`@piedpiper911/dsh-workflow-canvas`](https://github.com/PiedPiper911/dsh-workflow-canvas).
-- **Limits**: Up to 4 subagents run concurrently; per-node `Scope` only narrows tools within the main chat's permission/sandbox ceiling.
+- **Presets & cross-session reuse**: Click `☰ Presets` to save the current canvas at the top of the menu (immediately available in any new chat), or load one of the 4 starter templates and **New blank canvas**. Custom presets live in browser storage — use `⋯ → ⇧ Copy JSON` and `⇩ Import` to share across devices.
+- **Partial resume & concurrency**: If a mid-flow node fails, call `retryFailed: true` or `fromNodes` to reuse succeeded outputs and re-run only the failed segment and its downstream; adjust max concurrency (1 / 2 / 4 / 6 / 8, default 4) under `⋯`.
+- **How this differs from other canvas plugins**: Built for **multi-subagent orchestration + conditional routing + conversation Lead gates**; for `ctx.workflows` low-level tool pipelines, see [`@piedpiper911/dsh-workflow-canvas`](https://github.com/PiedPiper911/dsh-workflow-canvas).
+- **Limits**: Per-node `Scope` only narrows tools within the main chat's permission/sandbox ceiling.
 
 ## Development & internals
 

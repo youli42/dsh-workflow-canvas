@@ -12,6 +12,7 @@ A canvas is a DAG of agents the user can see and edit.
 - **Entry Lead** (`id: "lead"`, blue top bar) — created automatically by `canvas_generate` to hold the overall `task`. **Do not author a separate entry Lead node** — wire first-wave nodes directly from `from: "lead"`. The entry Lead **never** triggers `need-lead` (it does not pause before Wave 1).
 - **Downstream Lead** (`kind: "lead"`, blue top bar) — performed by the conversation itself, never spawned. Any added non-entry Lead node holds a `role` and pauses the run (`status: "need-lead"`) so you can decide, review, or integrate before continuing.
 - **Subagent** (`kind: "agent"`, green top bar) — spawned as a child agent with its own model, reasoning effort, capability scope, fallback model and memory switch. Wire every subagent's output into a downstream node or final Lead so nothing becomes a dead end.
+- **Condition** (`kind: "condition"`, amber top bar) — lightweight read-only (`minimal`) branch judge that evaluates upstream outputs (including failure/incomplete flags) against `role`. Defaults to binary `if/else` (`branch: "true"` / `"false"`, returning `{ pass, reason }`); set `branches: ["通过", "小修", "重做"]` (2+ entries) for multi-way `switch/case` routing (`{ branches: [...], reason }`), with optional `multiMatch: true` to run all matching branches in parallel (and returning `[]` skips all downstream branches when none match). Unchosen branches are pruned automatically without spawning (even when a side `session-ref` wire connects an upstream ancestor into a pruned branch), and branches can converge back into a shared downstream node or terminal Lead.
 
 ## Which tool to call
 
@@ -26,7 +27,7 @@ Prefer `canvas_patch` for edits: it merges by node id, so renamed, re-roled or r
 
 ## Node fields
 
-`id` (stable handle, never reuse it for a different node), `kind` (`lead` or `agent`), `label` (display name), `role` (what this step must do — this is the instruction the node actually follows), `provider` / `model`, `reasoning` (an effort id declared by that model), `preset` (`standard` or `minimal`), `keepSession`, `fallbackModel` / `fallbackProvider`.
+`id` (stable handle, never reuse it for a different node), `kind` (`lead`, `agent`, or `condition`), `label` (display name), `role` (what this step must do, or for `condition` nodes the routing rule), `branches` (optional for `condition` nodes: 2–5 branch names for `switch/case`), `provider` / `model`, `reasoning` (an effort id declared by that model), `preset` (`standard` or `minimal`), `keepSession`, `fallbackModel` / `fallbackProvider`.
 
 Fill `role` for every node. A node with an empty role still runs, but it invents its own task and may wander.
 
@@ -45,7 +46,7 @@ Capability (`preset`) is a two-state switch:
 | `structured` | blue | a JSON object; the upstream node is asked for structured output automatically, so do not set that by hand |
 | `session-ref` | purple | the upstream child session; the downstream step runs inside it |
 
-Links only join matching types. Nodes the entry Lead cannot reach are skipped at run time and drawn dashed.
+Output sockets determine link type; every non-entry node has a single universal left input that accepts any incoming channel (`prompt`, `structured`, `session-ref`, or condition branches). Nodes the entry Lead cannot reach are skipped at run time and drawn dashed.
 
 ## Running
 
