@@ -937,6 +937,29 @@ function publishCanvas(scope, sessionId, canvas) {
   }
 }
 
+/**
+ * Publish live run-state telemetry (condition decisions, pruned nodes, blocked edges,
+ * waitingLead) to `.dsh/canvas/<sessionId>.run.json` so the sidebar canvas can
+ * visualize branch routing and verdict reasons without touching the canvas definition file.
+ */
+function publishRunState(scope, sessionId, runState) {
+  try {
+    if (!sessionId) return false;
+    const live = scope && scope.sessions && scope.sessions.get(sessionId);
+    const root = live && live.header && live.header.cwd;
+    if (!root) return false;
+    const dir = join(root, '.dsh', 'canvas');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, sessionId + '.run.json'), JSON.stringify({
+      ...(runState || {}),
+      at: Date.now(),
+    }), 'utf8');
+    return true;
+  } catch (_e) {
+    return false;
+  }
+}
+
 async function runPlan(scope, args, exec) {
   const agent = exec && exec.agent;
   const sid = agent && agent.id !== undefined ? String(agent.id) : '';
@@ -1225,6 +1248,18 @@ async function executePlan(scope, plan, args, exec) {
   if (!state.decisions) state.decisions = {};
   if (!state.fallbackLinks) state.fallbackLinks = [];
 
+  const emitRunState = (status, waitingLead) => {
+    if (!sid) return;
+    publishRunState(scope, sid, {
+      status,
+      decisions: { ...state.decisions },
+      pruned: Array.from(state.pruned || []),
+      blockedEdges: Array.from(state.blockedEdges || []),
+      waitingLead: waitingLead ? { id: waitingLead.id, label: waitingLead.label } : null,
+    });
+  };
+  emitRunState('running', null);
+
   const snapshotLastRun = (haltedFlag) => {
     if (!sid) return;
     lastRunBySession.set(sid, {
@@ -1412,6 +1447,7 @@ async function executePlan(scope, plan, args, exec) {
 
   for (;;) {
     if (isAborted()) {
+      emitRunState('halted', null);
       if (sid) runBySession.delete(sid);
       return { error: '工作流执行已取消。' };
     }
@@ -1420,6 +1456,7 @@ async function executePlan(scope, plan, args, exec) {
     // results are dropped before returning the halted report.
     if (haltedReason && inFlight.size === 0) {
       snapshotLastRun(true);
+      emitRunState('halted', null);
       if (sid) runBySession.delete(sid);
       saveStore();
       return {
@@ -1438,6 +1475,7 @@ async function executePlan(scope, plan, args, exec) {
     const remaining = runnable.filter((n) => !state.done.has(n.id));
     if (!remaining.length) {
       snapshotLastRun(false);
+      emitRunState('done', null);
       runBySession.delete(sid);
       saveStore();
       return {
@@ -1459,6 +1497,7 @@ async function executePlan(scope, plan, args, exec) {
       const { node, outcome } = await Promise.race(inFlight.values());
       inFlight.delete(node.id);
       if (isAborted()) {
+        emitRunState('halted', null);
         if (sid) runBySession.delete(sid);
         return { error: '工作流执行已取消。' };
       }
@@ -1491,8 +1530,10 @@ async function executePlan(scope, plan, args, exec) {
             state.decisions[node.id].fallbackLead = fallbackLead.label;
             state.results[node.id] += '（未擅自选择分支，已直接转交至最近 Lead「' + fallbackLead.label + '」）';
             recomputeBranchPrune();
+            emitRunState('running', null);
           } else {
             recomputeBranchPrune();
+            emitRunState('running', null);
             haltedReason = '条件节点「' + node.label + '」自身执行失败（' + failReason
               + '），为避免误走分支已停止下游执行。';
           }
@@ -1545,6 +1586,7 @@ async function executePlan(scope, plan, args, exec) {
           }
         }
         recomputeBranchPrune();
+        emitRunState('running', null);
         continue;
       }
       state.results[node.id] = outcome.text;
@@ -1598,6 +1640,7 @@ async function executePlan(scope, plan, args, exec) {
       // Terminal Lead: zero downstream nodes remain, so complete the run directly
       // and hand off final review/delivery to the Lead without a redundant extra turn.
       snapshotLastRun(false);
+      emitRunState('done', null);
       if (sid) runBySession.delete(sid);
       saveStore();
       return {
@@ -1626,6 +1669,7 @@ async function executePlan(scope, plan, args, exec) {
         label: leadNode.label,
         role: leadNode.role || leadNode.label,
       };
+      emitRunState('need-lead', state.waitingLead);
       return {
         status: 'need-lead',
         node: {
@@ -1735,6 +1779,7 @@ export function apply(ctx) {
               if (!id) return { kind: 'error', text: 'no session' };
               canvasBySession.set(id, parsePayload(rawInput));
               runBySession.delete(id);
+              publishRunState(ctx, id, { status: 'idle', decisions: {}, pruned: [], blockedEdges: [], waitingLead: null });
               saveStore();
               return { kind: 'success', text: 'canvas synced' };
             } catch (error) {
@@ -1863,6 +1908,7 @@ export function apply(ctx) {
                 });
                 runBySession.delete(sid);
                 lastRunBySession.delete(sid);
+                publishRunState(scope, sid, { status: 'idle', decisions: {}, pruned: [], blockedEdges: [], waitingLead: null });
                 saveStore();
               }
               return { canvas, delivered, warnings };
@@ -1920,6 +1966,7 @@ export function apply(ctx) {
               const nextPlan = patched.plan;
               canvasBySession.set(sid, { enabled: payload.enabled, plan: nextPlan });
               runBySession.delete(sid);
+              publishRunState(scope, sid, { status: 'idle', decisions: {}, pruned: [], blockedEdges: [], waitingLead: null });
               saveStore();
               const patchDoc = {
                 mode: 'merge',

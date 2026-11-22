@@ -83,6 +83,7 @@ Drop a **Condition** node anywhere in the graph to route downstream automaticall
 
 - Supports default binary **`Yes / No`**, multi-way **`switch/case`** via **`+ Case`** (e.g. `Pass / Minor Fix / Rewrite`), and **`Single / Multi`** match modes.
 - Unchosen branches are pruned automatically without spawning; if zero branches match or the condition node itself fails, it never guesses — it skips intermediate branches and hands off to the nearest downstream Lead.
+- Once judged, a compact verdict pill appears right under the condition card (click to inspect the full verdict reason), while unchosen branch edges and skipped nodes dim automatically.
 
 ![3-way switch/case conditional routing and automatic branch pruning](docs/images/condition-switch-run.gif)
 
@@ -90,10 +91,10 @@ Drop a **Condition** node anywhere in the graph to route downstream automaticall
 
 ### 5. Enable and run
 
-Press **`● ON`** at the top-left of the canvas, then send your task in chat (while enabled, a per-session runtime context notifies the agent automatically):
+Press **`● ON`** at the top-left of the canvas, then either click **`▶ Run`** directly on the Entry Lead card (when its task is filled) or send your task in chat (while enabled, a per-session runtime context notifies the agent automatically):
 
-- If the entry Lead's task is blank, your chat message is passed as `task`.
-- At an intermediate **Lead** node, the canvas shows **`⏸ Ready`** and hands control to chat; once you reply, downstream nodes resume automatically through the final Lead review.
+- If the entry Lead's task is blank, `▶ Run` stays disabled with a hint and you can still send your chat message directly as `task`.
+- At an intermediate **Lead** node, the canvas shows **`⏸ Ready`** (and Entry Lead shows `⏸ Awaiting Lead`) while handing control to chat; once you reply, downstream nodes resume automatically through the final Lead review.
 - Re-running in the same chat supports `reset: true`; if any node has saved **Memory**, the agent confirms whether to keep memory or clear it (`clearMemory: true`).
 
 ![Auto-run enabled canvas, pause at Lead decision, and finish](docs/images/lead-pause-resume.gif)
@@ -119,7 +120,7 @@ Active nodes glow blue with animated flow wires and turn green when done. **Clic
 
 | Control / Shortcut | Action |
 |---|---|
-| `Shift+A` | Add a node at the cursor (`1` = Subagent, `2` = Lead, `3` = Condition) |
+| `Shift+A` / Drag-wire drop | Add a node at cursor, or drag from an output socket onto blank canvas to create & auto-connect (`1` Subagent, `2` Lead, `3` Condition) |
 | Middle-drag / `Space` + left-drag | Pan the canvas |
 | Wheel / `⊡ Fit` / `100%` pill | Zoom around cursor / fit all nodes / click to reset 100%, drag left-right to scrub zoom |
 | Marquee drag + `Ctrl+D` / `Delete` | Multi-select move, duplicate (with settings), or batch delete |

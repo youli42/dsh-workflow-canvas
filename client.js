@@ -204,6 +204,20 @@ window.__ModuleLoader__.load({
         duplicatedNodes: '已复制节点',
         deletedNodes: '已删除节点（可用 ↶ 撤销）',
         addMenuTitle: '新建节点 (Shift+A)',
+        addMenuLinkTitle: '拖线新建并自动连线',
+        stPruned: '已跳过',
+        tipPruned: '未被条件分支命中，已跳过执行（不消耗额度）',
+        verdictReasonTitle: '条件判决理由',
+        verdictMatched: '命中分支：',
+        verdictFallback: '已跳过中间分支 → 转交 Lead：',
+        verdictNoReason: '（裁判未附额外说明）',
+        tipVerdictChip: '点击查看完整判断理由',
+        runBtn: '▶ 运行',
+        runBtnRunning: '进行中…',
+        runBtnWaiting: '⏸ 等待决策',
+        runStarted: '已向当前会话发起画布执行',
+        runFailed: '发起运行失败',
+        runSendUnavailable: '当前宿主不支持从画布直接发起对话，请在聊天框发送消息启动',
         fxLabel: '视觉效果',
         fxMinimal: '极简',
         fxStandard: '标准',
@@ -334,6 +348,20 @@ window.__ModuleLoader__.load({
         duplicatedNodes: 'Duplicated nodes',
         deletedNodes: 'Deleted nodes (use Undo to restore)',
         addMenuTitle: 'Add node (Shift+A)',
+        addMenuLinkTitle: 'Create & connect node',
+        stPruned: 'Skipped',
+        tipPruned: 'Skipped because no matching condition branch routed here (0 tokens spent)',
+        verdictReasonTitle: 'Branch verdict',
+        verdictMatched: 'Matched: ',
+        verdictFallback: 'Skipped branches → Lead: ',
+        verdictNoReason: '(No extra reason provided)',
+        tipVerdictChip: 'Click to inspect verdict reason',
+        runBtn: '▶ Run',
+        runBtnRunning: 'Running…',
+        runBtnWaiting: '⏸ Awaiting Lead',
+        runStarted: 'Workflow run queued in this chat',
+        runFailed: 'Failed to start run',
+        runSendUnavailable: 'Direct canvas launch is unavailable in this host; send a message in chat to start',
         fxLabel: 'Visual effects',
         fxMinimal: 'Minimal',
         fxStandard: 'Standard',
@@ -465,6 +493,11 @@ window.__ModuleLoader__.load({
         display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px',
         padding: '5px 8px', borderRadius: '4px', fontSize: '11px', cursor: 'pointer',
         color: C.text, whiteSpace: 'nowrap',
+      },
+      addMenuRowDisabled: {
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px',
+        padding: '5px 8px', borderRadius: '4px', fontSize: '11px', cursor: 'not-allowed',
+        color: C.dim, opacity: 0.45, whiteSpace: 'nowrap',
       },
       addMenuHint: { fontSize: '10px', color: C.dim },
       helpOverlay: {
@@ -733,12 +766,124 @@ window.__ModuleLoader__.load({
         position: 'absolute', left: '2px', top: '10px', bottom: '10px', width: '3px',
         borderRadius: '2px', zIndex: 3,
       },
+      verdictChip: {
+        position: 'absolute', left: '0', top: 'calc(100% + 5px)', maxWidth: NODE_W + 'px',
+        display: 'inline-flex', alignItems: 'center', gap: '4px',
+        padding: '2px 8px', borderRadius: '999px', fontSize: '10px', lineHeight: '14px',
+        background: C.elevated, border: '1px solid ' + C.border, color: C.text,
+        cursor: 'pointer', userSelect: 'none', zIndex: 12,
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        boxShadow: '0 4px 12px rgba(0,0,0,0.32)',
+      },
+      verdictPopover: {
+        position: 'absolute', left: '0', top: 'calc(100% + 28px)', width: '272px',
+        background: C.elevated, border: '1px solid ' + C.border, borderRadius: '8px',
+        padding: '9px 10px', zIndex: 65, boxShadow: '0 14px 32px rgba(0,0,0,0.52)',
+        color: C.text, fontSize: '11px', lineHeight: '1.5', userSelect: 'text',
+      },
     };
 
     let hostCtx = null;
 
     function socketCenterY(i) {
       return SOCKET_BAND_TOP + i * ROW_H + ROW_H / 2;
+    }
+
+    /**
+     * Determine which node kinds can legally receive a wire dragged out from `fromNode`.
+     * Mirrors the canvas invariant that Lead -> Lead direct links are forbidden.
+     */
+    function compatibleTargetsForWire(fromNode, _edgeType) {
+      const fromLead = Boolean(fromNode && fromNode.kind === 'lead');
+      return {
+        agent: true,
+        lead: !fromLead,
+        condition: true,
+        leadBlockedReason: fromLead ? 'leadToLeadBlocked' : '',
+      };
+    }
+
+    /** Format a compact verdict pill for a condition node decision snapshot. */
+    function conditionVerdictSummary(decision, lang) {
+      if (!decision || typeof decision !== 'object') return null;
+      const en = lang === 'en';
+      if (decision.failed) {
+        return {
+          tone: 'failed',
+          text: '⚠ ' + (en ? 'Judge failed' : '判定失败')
+            + (decision.fallbackLead ? ' → ' + decision.fallbackLead : ''),
+        };
+      }
+      const labels = Array.isArray(decision.branchLabels) && decision.branchLabels.length
+        ? decision.branchLabels
+        : (Array.isArray(decision.branches) ? decision.branches : []);
+      if (!labels.length) {
+        return {
+          tone: 'warn',
+          text: '⚠ ' + (en ? 'No match' : '未命中')
+            + (decision.fallbackLead ? ' → ' + decision.fallbackLead : ''),
+        };
+      }
+      return {
+        tone: 'ok',
+        text: '→ ' + labels.join(' · '),
+      };
+    }
+
+    /** Compute the Entry Lead "▶ Run" button state, label, disabled flag, and tooltip. */
+    function entryRunButtonState({ enabled, task, sessionRunning, waitingLead, triggering, lang }) {
+      const en = lang === 'en';
+      if (sessionRunning || triggering) {
+        return {
+          state: 'running',
+          disabled: true,
+          label: en ? 'Running…' : '进行中…',
+          title: en
+            ? 'Workflow is currently running; wait for this turn to finish'
+            : '工作流正在运行中，请等待本轮结束',
+        };
+      }
+      if (waitingLead) {
+        const wName = typeof waitingLead === 'object' && waitingLead && waitingLead.label
+          ? waitingLead.label
+          : '';
+        return {
+          state: 'waiting',
+          disabled: true,
+          label: en ? '⏸ Awaiting Lead' : '⏸ 等待决策',
+          title: en
+            ? 'Paused at intermediate Lead' + (wName ? ' "' + wName + '"' : '') + '; reply in chat to continue'
+            : '当前停在中间 Lead' + (wName ? '「' + wName + '」' : '') + '，请先在聊天室回复拍板继续',
+        };
+      }
+      if (!enabled) {
+        return {
+          state: 'disabled',
+          disabled: true,
+          label: en ? '▶ Run' : '▶ 运行',
+          title: en
+            ? 'Turn on ● ON in the top-left corner to enable this canvas first'
+            : '请先点亮左上角 ● ON 启用画布',
+        };
+      }
+      if (!String(task || '').trim()) {
+        return {
+          state: 'disabled',
+          disabled: true,
+          label: en ? '▶ Run' : '▶ 运行',
+          title: en
+            ? 'Fill in the Entry Lead task before running to avoid an empty run'
+            : '请先在入口节点填写任务内容，避免空跑',
+        };
+      }
+      return {
+        state: 'ready',
+        disabled: false,
+        label: en ? '▶ Run' : '▶ 运行',
+        title: en
+          ? 'Start the enabled workflow directly (auto-syncs unsaved edits). For retryFailed, reset, or clearing node memory, specify in chat.'
+          : '直接按当前画布起跑（会自动同步未保存改动）。如需断点续跑（retryFailed）、从头重跑（reset）或清理记忆节点，可在聊天中说明。',
+      };
     }
 
     function isCustomBranches(node) {
@@ -1569,7 +1714,13 @@ window.__ModuleLoader__.load({
       viewRef.current = view;
       const [statusById, setStatusById] = useState({});
       const [runsById, setRunsById] = useState({});
+      const [runState, setRunState] = useState(null);
+      const [decisionViewFor, setDecisionViewFor] = useState(null);
       const [sessionRunning, setSessionRunning] = useState(false);
+      const [runTriggering, setRunTriggering] = useState(false);
+      const runTriggeringRef = useRef(false);
+      const pendingHandledRef = useRef(false);
+      const lastNodePrefsRef = useRef({ provider: '', model: '', reasoning: '', preset: 'standard' });
       const [presets, setPresets] = useState(loadPresets);
       const [presetOpen, setPresetOpen] = useState(null);
       const [presetName, setPresetName] = useState('');
@@ -1667,25 +1818,89 @@ window.__ModuleLoader__.load({
       const pushPlan = (nextEnabled, overrideNodes, overrideEdges, overrideParallel) => {
         try {
           const face = sessionFace(sessionId);
-          if (!face || typeof face.command !== 'function') { flash(t('syncFailed')); return; }
+          if (!face || typeof face.command !== 'function') { flash(t('syncFailed')); return Promise.resolve(false); }
           const curNodes = Array.isArray(overrideNodes) ? overrideNodes : nodesRef.current;
           const curEdges = Array.isArray(overrideEdges) ? overrideEdges : edgesRef.current;
           const sig = planSig(nextEnabled, curNodes, curEdges, overrideParallel);
-          if (sig === lastSync.current) { setDirty(false); flash(t('upToDate')); return; }
+          if (sig === lastSync.current) { setDirty(false); flash(t('upToDate')); return Promise.resolve(true); }
           const line = '/canvas-sync ' + encodeURIComponent(sig);
           const hasStandardAgent = nextEnabled && curNodes.some((n) => n && n.kind !== 'lead' && (n.preset || 'standard') !== 'minimal');
-          face.command(line).then((ack) => {
+          return face.command(line).then((ack) => {
             if (ack && ack.ok) {
               lastSync.current = sig;
               setDirty(false);
+              setRunState(null);
+              setDecisionViewFor(null);
               snapshotStaleCatalog();
               flash(hasStandardAgent ? t('syncedWithStdWarn') : t('syncedToHost'));
-            } else {
-              flash(t('syncFailed'));
+              return true;
             }
-          }, () => flash(t('syncFailed')));
+            flash(t('syncFailed'));
+            return false;
+          }, () => { flash(t('syncFailed')); return false; });
         } catch (_e) {
           flash(t('syncFailed'));
+          return Promise.resolve(false);
+        }
+      };
+
+      const runFromEntry = async () => {
+        if (runTriggeringRef.current || sessionRunning) return;
+        const entry = nodesRef.current.find((n) => n.id === 'lead');
+        const taskText = String((entry && entry.task) || '').trim();
+        const waitingLead = runState
+          ? (runState.waitingLead || null)
+          : (leadReadyIds.size > 0 ? { id: Array.from(leadReadyIds)[0] } : null);
+        const btn = entryRunButtonState({
+          enabled,
+          task: taskText,
+          sessionRunning,
+          waitingLead,
+          triggering: runTriggeringRef.current,
+          lang,
+        });
+        if (btn.disabled) { flash(btn.title); return; }
+        const face = sessionFace(sessionId);
+        const canPrompt = Boolean(face && typeof face.prompt === 'function');
+        const canConvSend = Boolean(hostCtx && hostCtx.conversation && typeof hostCtx.conversation.send === 'function');
+        if (!canPrompt && !canConvSend) { flash(t('runSendUnavailable')); return; }
+        runTriggeringRef.current = true;
+        setRunTriggering(true);
+        let succeeded = false;
+        try {
+          if (dirty) {
+            const ok = await pushPlan(true);
+            if (!ok) {
+              runTriggeringRef.current = false;
+              setRunTriggering(false);
+              return;
+            }
+          }
+          const promptText = lang === 'en'
+            ? 'Run the enabled workflow canvas for this task:\n' + taskText
+            : '按当前已启用的画布执行以下任务：\n' + taskText;
+          if (canPrompt) {
+            const res = await face.prompt([{ type: 'text', text: promptText }], 'queue');
+            if (res && res.ok === false) {
+              throw new Error((res.error && res.error.message) || 'prompt failed');
+            }
+          } else {
+            await hostCtx.conversation.send(promptText);
+          }
+          succeeded = true;
+          flash(t('runStarted'));
+        } catch (err) {
+          flash(t('runFailed') + (err && err.message ? ': ' + String(err.message).slice(0, 60) : ''));
+        } finally {
+          if (!succeeded) {
+            runTriggeringRef.current = false;
+            setRunTriggering(false);
+          } else {
+            setTimeout(() => {
+              runTriggeringRef.current = false;
+              setRunTriggering(false);
+            }, 1200);
+          }
         }
       };
 
@@ -2063,39 +2278,78 @@ window.__ModuleLoader__.load({
         openRun(node, run);
       };
 
-      const addNode = (kind, atWorld) => {
+      const addNode = (kind, atWorld, linkFrom) => {
+        const normKind = kind === 'lead' ? 'lead' : (kind === 'condition' ? 'condition' : 'agent');
+        if (linkFrom && linkFrom.fromId) {
+          const srcNode = nodesRef.current.find((n) => n.id === linkFrom.fromId);
+          const compat = compatibleTargetsForWire(srcNode, linkFrom.type);
+          if ((normKind === 'lead' && !compat.lead)
+            || (normKind === 'agent' && !compat.agent)
+            || (normKind === 'condition' && !compat.condition)) {
+            flash(t(compat.leadBlockedReason || 'leadToLeadBlocked'));
+            return;
+          }
+        }
         pushSnapshot();
         const newId = 'n' + Date.now().toString(36) + Math.random().toString(36).slice(2, 4);
+        const prefs = lastNodePrefsRef.current || {};
         setNodes((ns) => {
           const i = ns.length;
           const center = viewportCenterWorld();
           const x = atWorld && typeof atWorld.x === 'number'
-            ? Math.round(atWorld.x - NODE_W / 2)
+            ? (linkFrom ? Math.round(atWorld.x) : Math.round(atWorld.x - NODE_W / 2))
             : center.x + 40 + (ns.length % 3) * 30;
           const y = atWorld && typeof atWorld.y === 'number'
-            ? Math.round(atWorld.y - NODE_H / 2)
+            ? (linkFrom ? Math.round(atWorld.y - socketCenterY(0)) : Math.round(atWorld.y - NODE_H / 2))
             : center.y - NODE_H / 2 + (ns.length % 3) * 40;
-          const normKind = kind === 'lead' ? 'lead' : (kind === 'condition' ? 'condition' : 'agent');
           const defaultLabel = normKind === 'lead'
             ? 'Lead 步骤 ' + i
             : (normKind === 'condition' ? (lang === 'en' ? 'Condition ' + i : '条件判断 ' + i) : 'Node ' + i);
-          return [...ns, {
+          const nextNode = {
             id: newId,
             kind: normKind,
             x,
             y,
             label: defaultLabel,
-            provider: '',
-            model: '',
-            preset: normKind === 'condition' ? 'minimal' : 'standard',
+            provider: normKind === 'lead' ? '' : (prefs.provider || ''),
+            model: normKind === 'lead' ? '' : (prefs.model || ''),
+            reasoning: normKind === 'lead' ? '' : (prefs.reasoning || ''),
+            preset: normKind === 'condition' ? 'minimal' : (prefs.preset || 'standard'),
             role: '',
-          }];
+          };
+          return [...ns, nextNode];
         });
+        if (linkFrom && linkFrom.fromId) {
+          const type = linkFrom.type || 'prompt';
+          const b = typeof linkFrom.branch === 'string' ? linkFrom.branch.trim() : '';
+          setEdges((es) => {
+            const nextEdge = {
+              id: 'e' + Date.now().toString(36) + Math.random().toString(36).slice(2, 4),
+              from: linkFrom.fromId,
+              to: newId,
+              type,
+            };
+            if (b) nextEdge.branch = b;
+            return [...es, nextEdge];
+          });
+        }
         setSelectedIds([newId]);
         setAddMenu(null);
       };
 
       const updateNode = (id, patch) => {
+        if (patch && ('provider' in patch || 'model' in patch || 'reasoning' in patch || 'preset' in patch)) {
+          const cur = nodesRef.current.find((n) => n.id === id);
+          if (cur && cur.kind !== 'lead') {
+            const prev = lastNodePrefsRef.current || {};
+            lastNodePrefsRef.current = {
+              provider: 'provider' in patch ? (patch.provider || '') : prev.provider,
+              model: 'model' in patch ? (patch.model || '') : prev.model,
+              reasoning: 'reasoning' in patch ? (patch.reasoning || '') : prev.reasoning,
+              preset: cur.kind === 'agent' && 'preset' in patch ? (patch.preset || 'standard') : prev.preset,
+            };
+          }
+        }
         setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, ...patch } : n)));
       };
 
@@ -2308,6 +2562,7 @@ window.__ModuleLoader__.load({
       /** Release over an output socket: completes a drag that started at the unified left input. */
       const onOutputUp = (e, id, type, branch) => {
         if (!pending || pending.dir !== 'in') return;
+        pendingHandledRef.current = true;
         e.preventDefault();
         e.stopPropagation();
         const b = typeof branch === 'string' ? branch.trim() : '';
@@ -2360,6 +2615,7 @@ window.__ModuleLoader__.load({
 
       const onInputUp = (e, id) => {
         if (!pending || pending.dir !== 'out') return;
+        pendingHandledRef.current = true;
         e.preventDefault();
         e.stopPropagation();
         if (pending.fromId !== id) {
@@ -2442,8 +2698,8 @@ window.__ModuleLoader__.load({
       const keyActionsRef = useRef(null);
       keyActionsRef.current = {
         undo, deleteSelected, duplicateSelected, openAddMenuAtCursor, addNode,
-        addMenu, roleEditFor, openModelFor, menuOpen, presetOpen, helpOpen,
-        setAddMenu, setRoleEditFor, setOpenModelFor, setMenuOpen, setPresetOpen, setHelpOpen,
+        addMenu, roleEditFor, openModelFor, menuOpen, presetOpen, helpOpen, decisionViewFor,
+        setAddMenu, setRoleEditFor, setOpenModelFor, setMenuOpen, setPresetOpen, setHelpOpen, setDecisionViewFor,
       };
       useEffect(() => {
         const isEditable = (target) => {
@@ -2455,7 +2711,7 @@ window.__ModuleLoader__.load({
           const act = keyActionsRef.current;
           if (!act) return;
           if (ev.key === 'Escape') {
-            if (act.addMenu || act.roleEditFor || act.openModelFor || act.menuOpen || act.presetOpen || act.helpOpen) {
+            if (act.addMenu || act.roleEditFor || act.openModelFor || act.menuOpen || act.presetOpen || act.helpOpen || act.decisionViewFor) {
               ev.preventDefault();
               act.setAddMenu(null);
               act.setRoleEditFor(null);
@@ -2463,24 +2719,26 @@ window.__ModuleLoader__.load({
               act.setMenuOpen(false);
               act.setPresetOpen(null);
               act.setHelpOpen(false);
+              act.setDecisionViewFor(null);
             }
             return;
           }
           if (isEditable(ev.target)) return;
           if (act.addMenu) {
+            const lf = act.addMenu.linkFrom || null;
             if (ev.key === '1' || ev.key === 'Enter') {
               ev.preventDefault();
-              act.addNode('agent', { x: act.addMenu.wx, y: act.addMenu.wy });
+              act.addNode('agent', { x: act.addMenu.wx, y: act.addMenu.wy }, lf);
               return;
             }
             if (ev.key === '2') {
               ev.preventDefault();
-              act.addNode('lead', { x: act.addMenu.wx, y: act.addMenu.wy });
+              act.addNode('lead', { x: act.addMenu.wx, y: act.addMenu.wy }, lf);
               return;
             }
             if (ev.key === '3') {
               ev.preventDefault();
-              act.addNode('condition', { x: act.addMenu.wx, y: act.addMenu.wy });
+              act.addNode('condition', { x: act.addMenu.wx, y: act.addMenu.wy }, lf);
               return;
             }
           }
@@ -2543,7 +2801,7 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         if (!dragging) return undefined;
         const move = (ev) => onCanvasMove(ev);
-        const up = () => onCanvasUp();
+        const up = (ev) => onCanvasUp(ev);
         window.addEventListener('mousemove', move);
         window.addEventListener('mouseup', up);
         return () => {
@@ -2567,6 +2825,7 @@ window.__ModuleLoader__.load({
         }
         if (e.button !== 0) return;
         if (roleEditFor) setRoleEditFor(null);
+        if (decisionViewFor) setDecisionViewFor(null);
         if (menuOpen) setMenuOpen(false);
         if (addMenu) setAddMenu(null);
         if (presetOpen) setPresetOpen(null);
@@ -2635,7 +2894,7 @@ window.__ModuleLoader__.load({
         }
       };
 
-      const onCanvasUp = () => {
+      const onCanvasUp = (ev) => {
         if (cutRef.current) {
           cutRef.current = null;
           setDragging(false);
@@ -2658,6 +2917,39 @@ window.__ModuleLoader__.load({
           setPanning(false);
         }
         nodeDrag.current = null;
+        const handled = pendingHandledRef.current;
+        pendingHandledRef.current = false;
+        if (!handled && pending && pending.dir === 'out') {
+          const dist = Math.hypot(pending.x - pending.sx, pending.y - pending.sy);
+          const wrap = canvasWrapRef.current;
+          if (dist >= 16 && wrap) {
+            const wrapRect = wrap.getBoundingClientRect();
+            const cx = ev && typeof ev.clientX === 'number' ? ev.clientX : (wrapRect.left + wrapRect.width / 2);
+            const cy = ev && typeof ev.clientY === 'number' ? ev.clientY : (wrapRect.top + wrapRect.height / 2);
+            const sx = Math.max(8, Math.min(wrapRect.width - 176, cx - wrapRect.left));
+            const sy = Math.max(8, Math.min(wrapRect.height - 110, cy - wrapRect.top));
+            setAddMenu({
+              sx,
+              sy,
+              wx: pending.x,
+              wy: pending.y,
+              linkFrom: {
+                fromId: pending.fromId,
+                type: pending.type || 'prompt',
+                branch: pending.branch || '',
+                color: pending.color || '#8a8f98',
+                sx: pending.sx,
+                sy: pending.sy,
+                x: pending.x,
+                y: pending.y,
+              },
+            });
+            setMenuOpen(false);
+            setPresetOpen(null);
+            setOpenModelFor(null);
+            setDecisionViewFor(null);
+          }
+        }
         setPending(null);
         setDragging(false);
       };
@@ -2781,8 +3073,16 @@ window.__ModuleLoader__.load({
           '.dsh/canvas/session-' + bare + '.json',
           '.dsh/canvas/' + bare + '.json',
         ].filter((v, i, all) => all.indexOf(v) === i);
+        const runPaths = [
+          '.dsh/canvas/' + String(sessionId) + '.run.json',
+          '.dsh/canvas/session-' + bare + '.run.json',
+          '.dsh/canvas/' + bare + '.run.json',
+        ].filter((v, i, all) => all.indexOf(v) === i);
+        setRunState(null);
+        setDecisionViewFor(null);
         let alive = true;
         let lastText = '';
+        let lastRunText = '';
         const tick = async () => {
           try {
             let text = '';
@@ -2797,30 +3097,51 @@ window.__ModuleLoader__.load({
                 setSyncNote(t('syncReadFail') + String((err && err.message) || err).slice(0, 80));
               }
             }
-            if (!text) return;
-            if (text === lastText) return;
-            lastText = text;
-            const doc = JSON.parse(text);
-            const canvas = doc && doc.canvas;
-            // A canvas the user has edited more recently wins over an old file.
-            try {
-              const raw = window.localStorage.getItem(storageKey(sessionId));
-              const local = raw ? JSON.parse(raw) : null;
-              if (local && typeof local.at === 'number' && typeof doc.at === 'number' && local.at > doc.at) {
-                lastText = text;
-                return;
+            if (text && text !== lastText) {
+              lastText = text;
+              const doc = JSON.parse(text);
+              const canvas = doc && doc.canvas;
+              // A canvas the user has edited more recently wins over an old file.
+              let staleLocal = false;
+              try {
+                const raw = window.localStorage.getItem(storageKey(sessionId));
+                const local = raw ? JSON.parse(raw) : null;
+                if (local && typeof local.at === 'number' && typeof doc.at === 'number' && local.at > doc.at) {
+                  staleLocal = true;
+                }
+              } catch (_e) { /* ignore */ }
+              if (!staleLocal) {
+                const valid = canvas && Array.isArray(canvas.nodes)
+                  && (canvas.mode === 'merge' || canvas.nodes.length > 0)
+                  && canvas.nodes.every((n) => n && typeof n.id === 'string');
+                if (valid && applyCanvasDoc(canvas, doc.at, true)) {
+                  flash(t('generated'));
+                  setSyncNote(t('syncApplied'));
+                  setTimeout(() => setSyncNote(''), 4000);
+                }
+                else setSyncNote(t('syncBadFile'));
               }
-            } catch (_e) { /* ignore */ }
-            const valid = canvas && Array.isArray(canvas.nodes)
-              && (canvas.mode === 'merge' || canvas.nodes.length > 0)
-              && canvas.nodes.every((n) => n && typeof n.id === 'string');
-            if (valid && applyCanvasDoc(canvas, doc.at, true)) {
-              flash(t('generated'));
-              setSyncNote(t('syncApplied'));
-              setTimeout(() => setSyncNote(''), 4000);
             }
-            else setSyncNote(t('syncBadFile'));
           } catch (_e) { /* file absent or not readable yet */ }
+          try {
+            let runText = '';
+            for (const rp of runPaths) {
+              try {
+                const res = await wf.read(sessionId, rp, {}, new AbortController().signal);
+                if (!alive) return;
+                const payload = res && res.ok === false ? null : (res && res.value !== undefined ? res.value : res);
+                const read = payload && (typeof payload.text === 'string' ? payload.text : '');
+                if (read) { runText = read; break; }
+              } catch (_e) { /* ignore */ }
+            }
+            if (runText && runText !== lastRunText) {
+              lastRunText = runText;
+              const parsed = JSON.parse(runText);
+              if (parsed && typeof parsed === 'object') {
+                setRunState(parsed.status === 'idle' ? null : parsed);
+              }
+            }
+          } catch (_e) { /* run state file absent or not readable yet */ }
         };
         const timer = setInterval(tick, 1500);
         tick();
@@ -3187,6 +3508,13 @@ window.__ModuleLoader__.load({
         }
       }
 
+      const decisionsById = (enabled && runState && runState.decisions && typeof runState.decisions === 'object')
+        ? runState.decisions
+        : {};
+      const prunedSet = new Set(enabled && runState && Array.isArray(runState.pruned) ? runState.pruned : []);
+      const blockedEdgeSet = new Set(enabled && runState && Array.isArray(runState.blockedEdges) ? runState.blockedEdges : []);
+      const edgeKeyForState = (e) => String(e.from) + '->' + String(e.to) + '|' + String(e.type || 'prompt') + '|' + String(e.branch || '');
+
       const edgeEls = edges.map((edge) => {
         const from = nodeById.get(edge.from);
         const to = nodeById.get(edge.to);
@@ -3194,6 +3522,7 @@ window.__ModuleLoader__.load({
         const color = edgeColorFor(from, edge);
         const d = edgePath(from, to, edge);
         const highlighted = cutVictims.includes(edge.id);
+        const isPrunedEdge = !highlighted && (blockedEdgeSet.has(edgeKeyForState(edge)) || prunedSet.has(edge.from) || prunedSet.has(edge.to));
         const hasSel = selectedSet.size > 0;
         const linkedToSel = hasSel && (selectedSet.has(edge.from) || selectedSet.has(edge.to));
         const toRunning = enabled && statusById[edge.to] === 'running';
@@ -3201,7 +3530,7 @@ window.__ModuleLoader__.load({
           || from.kind === 'lead'
           || statusById[edge.from] === 'done'
           || statusById[edge.from] === 'failed';
-        const isFlowing = enabled && !highlighted && (
+        const isFlowing = enabled && !highlighted && !isPrunedEdge && (
           (toRunning && fromReady)
           || (leadReadyIds.has(edge.to) && (statusById[edge.from] === 'done' || statusById[edge.from] === 'failed'))
         );
@@ -3214,11 +3543,11 @@ window.__ModuleLoader__.load({
           || statusById[edge.to] === 'failed'
           || leadReadyIds.has(edge.to)
           || leadDoneIds.has(edge.to);
-        const isCompletedLink = enabled && !highlighted && fromSettled && toSettled;
-        const dimmed = hasSel && !linkedToSel && !highlighted && !isFlowing;
+        const isCompletedLink = enabled && !highlighted && !isPrunedEdge && fromSettled && toSettled;
+        const dimmed = isPrunedEdge || (hasSel && !linkedToSel && !highlighted && !isFlowing);
         const strokeColor = highlighted ? '#e5534b' : color;
         const baseWidth = highlighted ? 3 : (linkedToSel || isFlowing ? 2.6 : 2);
-        const baseOpacity = dimmed ? 0.26 : (isFlowing || linkedToSel ? 1 : (isCompletedLink ? 0.92 : 0.78));
+        const baseOpacity = isPrunedEdge ? 0.22 : (dimmed ? 0.26 : (isFlowing || linkedToSel ? 1 : (isCompletedLink ? 0.92 : 0.78)));
         const useGlow = fxLevel === 'vivid' && !dimmed;
         const showDashFlow = isFlowing && fxLevel !== 'minimal';
         const showBead = isFlowing && fxLevel === 'vivid';
@@ -3247,6 +3576,7 @@ window.__ModuleLoader__.load({
             stroke: strokeColor,
             strokeWidth: baseWidth,
             strokeOpacity: showDashFlow ? 0.35 : baseOpacity,
+            strokeDasharray: isPrunedEdge ? '4 4' : undefined,
             fill: 'none',
           }),
           showDashFlow && fxLevel === 'vivid' && h('path', {
@@ -3300,16 +3630,20 @@ window.__ModuleLoader__.load({
         });
         if (node.kind === 'condition') {
           const branches = conditionBranchesForUI(node, lang);
+          const condDec = decisionsById[node.id] || null;
+          const matchedBranchIds = condDec && Array.isArray(condDec.branches) ? new Set(condDec.branches) : null;
           return h('div', { style: S.band },
             unifiedInSocket,
             h('span', { style: { ...S.rowLabel, position: 'absolute', left: '12px', top: '3px', pointerEvents: 'none' } }, inText),
             branches.map((b) => {
               const outLinked = connectedOut.has(node.id + '|branch:' + b.id);
+              const isMatchedBranch = Boolean(matchedBranchIds && matchedBranchIds.has(b.id));
+              const isUnmatchedBranch = Boolean(matchedBranchIds && !matchedBranchIds.has(b.id));
               const outTip = !b.custom
                 ? (b.id === 'true' ? t('tipCondTrue') : t('tipCondFalse'))
                 : t('tipBranchOut');
               const editKey = 'branch:' + node.id + ':' + b.id;
-              return h('div', { key: b.id, style: S.condBranchRow },
+              return h('div', { key: b.id, style: { ...S.condBranchRow, opacity: isUnmatchedBranch ? 0.48 : 1 } },
                 h('div', {
                   style: { display: 'flex', alignItems: 'center', marginRight: '10px' },
                   onMouseDown: (e) => e.stopPropagation(),
@@ -3323,7 +3657,11 @@ window.__ModuleLoader__.load({
                     onClick: () => setRoleEditFor(roleEditFor === editKey ? null : editKey),
                   }, '⤢'),
                   h('input', {
-                    style: { ...S.condBranchInput, borderRight: '2px solid ' + b.color },
+                    style: {
+                      ...S.condBranchInput,
+                      borderRight: '2px solid ' + b.color,
+                      borderColor: isMatchedBranch ? b.color : C.border,
+                    },
                     value: b.label,
                     placeholder: t('branchPh'),
                     onFocus: () => setSelectedIds([node.id]),
@@ -3685,30 +4023,36 @@ window.__ModuleLoader__.load({
             }),
             h('span', null, (enabled ? t('enabled') : t('disabled')).replace(/^[●○]\s*/, '')),
           ),
-          addMenu && h('div', {
-            style: { ...S.addMenu, left: addMenu.sx + 'px', top: addMenu.sy + 'px' },
-            onMouseDown: (e) => e.stopPropagation(),
-          },
-            h('div', { style: S.addMenuHead }, t('addMenuTitle')),
-            h('div', {
-              style: S.addMenuRow,
-              onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
-              onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
-              onClick: () => addNode('agent', { x: addMenu.wx, y: addMenu.wy }),
-            }, h('span', null, t('addAgent')), h('span', { style: S.addMenuHint }, '1')),
-            h('div', {
-              style: S.addMenuRow,
-              onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
-              onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
-              onClick: () => addNode('lead', { x: addMenu.wx, y: addMenu.wy }),
-            }, h('span', null, t('addLead')), h('span', { style: S.addMenuHint }, '2')),
-            h('div', {
-              style: S.addMenuRow,
-              onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
-              onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
-              onClick: () => addNode('condition', { x: addMenu.wx, y: addMenu.wy }),
-            }, h('span', null, t('addCond')), h('span', { style: S.addMenuHint }, '3')),
-          ),
+          addMenu && (() => {
+            const lf = addMenu.linkFrom || null;
+            const srcNode = lf && lf.fromId ? nodeById.get(lf.fromId) : null;
+            const compat = lf ? compatibleTargetsForWire(srcNode, lf.type) : { agent: true, lead: true, condition: true, leadBlockedReason: '' };
+            return h('div', {
+              style: { ...S.addMenu, left: addMenu.sx + 'px', top: addMenu.sy + 'px' },
+              onMouseDown: (e) => e.stopPropagation(),
+            },
+              h('div', { style: S.addMenuHead }, lf ? t('addMenuLinkTitle') : t('addMenuTitle')),
+              h('div', {
+                style: S.addMenuRow,
+                onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+                onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+                onClick: () => addNode('agent', { x: addMenu.wx, y: addMenu.wy }, lf),
+              }, h('span', null, t('addAgent')), h('span', { style: S.addMenuHint }, '1')),
+              h('div', {
+                style: compat.lead ? S.addMenuRow : S.addMenuRowDisabled,
+                title: compat.lead ? undefined : t(compat.leadBlockedReason || 'leadToLeadBlocked'),
+                onMouseEnter: (e) => { if (compat.lead) e.currentTarget.style.background = C.hover; },
+                onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+                onClick: () => { if (compat.lead) addNode('lead', { x: addMenu.wx, y: addMenu.wy }, lf); },
+              }, h('span', null, t('addLead')), h('span', { style: S.addMenuHint }, '2')),
+              h('div', {
+                style: S.addMenuRow,
+                onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+                onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+                onClick: () => addNode('condition', { x: addMenu.wx, y: addMenu.wy }, lf),
+              }, h('span', null, t('addCond')), h('span', { style: S.addMenuHint }, '3')),
+            );
+          })(),
           h('div', {
             ref: canvasElRef,
             style: {
@@ -3744,9 +4088,10 @@ window.__ModuleLoader__.load({
                 strokeWidth: 1,
                 strokeDasharray: '4 3',
               }),
-              pending && (() => {
-                const color = pending.color || (SOCKET_TYPES.find((t) => t.id === pending.type) || SOCKET_TYPES[0]).color;
-                const d = 'M ' + (pending.sx + WORLD_PAD) + ' ' + (pending.sy + WORLD_PAD) + ' L ' + (pending.x + WORLD_PAD) + ' ' + (pending.y + WORLD_PAD);
+              (pending || (addMenu && addMenu.linkFrom)) && (() => {
+                const wire = pending || addMenu.linkFrom;
+                const color = wire.color || (SOCKET_TYPES.find((t) => t.id === wire.type) || SOCKET_TYPES[0]).color;
+                const d = 'M ' + (wire.sx + WORLD_PAD) + ' ' + (wire.sy + WORLD_PAD) + ' L ' + (wire.x + WORLD_PAD) + ' ' + (wire.y + WORLD_PAD);
                 return h('path', { d, stroke: color, strokeWidth: 2, strokeDasharray: '4 4', fill: 'none' });
               })(),
             ),
@@ -3797,6 +4142,9 @@ window.__ModuleLoader__.load({
                     ? 'linear-gradient(90deg, #d29922 0%, #f2cc60 50%, #d29922 100%)'
                     : 'linear-gradient(90deg, #2f81f7 0%, #58d580 50%, #2f81f7 100%)'))
                 : (isFailed ? '#e5534b' : (isLeadKind ? '#2f81f7' : (isCondKind ? '#d29922' : '#3fb950')));
+              const isPruned = enabled && prunedSet.has(node.id);
+              const condDecision = isCondKind ? (decisionsById[node.id] || null) : null;
+              const verdictInfo = condDecision ? conditionVerdictSummary(condDecision, lang) : null;
               return h('div', {
                 key: node.id,
                 'data-node': node.id,
@@ -3807,10 +4155,11 @@ window.__ModuleLoader__.load({
                   left: node.x + WORLD_PAD,
                   top: node.y + WORLD_PAD,
                   ...(isLeadKind ? S.leadNode : null),
-                  ...(isInactive ? S.orphanNode : null),
+                  ...(isInactive || isPruned ? S.orphanNode : null),
                   ...(stateStyle || null),
+                  ...(decisionViewFor === node.id ? { zIndex: 40 } : null),
                 },
-                title: isOrphan ? t('orphanTip') : (isSoloLead ? t('tipSoloLead') : (isDeadEnd ? t('tipDeadEnd') : undefined)),
+                title: isPruned ? t('tipPruned') : (isOrphan ? t('orphanTip') : (isSoloLead ? t('tipSoloLead') : (isDeadEnd ? t('tipDeadEnd') : undefined))),
                 onMouseDown: (e) => onNodeDown(e, node.id),
               },
                 h('div', {
@@ -3822,7 +4171,55 @@ window.__ModuleLoader__.load({
                 }),
                 h('div', { style: S.nodeHeader }),
                 h('div', { style: S.bandDivider }),
-                isDeadEnd
+                isEntry
+                  ? (() => {
+                      const waitingLead = runState
+                        ? (runState.waitingLead || null)
+                        : (leadReadyIds.size > 0 ? { id: Array.from(leadReadyIds)[0] } : null);
+                      const btn = entryRunButtonState({
+                        enabled,
+                        task: node.task || '',
+                        sessionRunning,
+                        waitingLead,
+                        triggering: runTriggering,
+                        lang,
+                      });
+                      const isReady = btn.state === 'ready';
+                      const isRun = btn.state === 'running';
+                      const isWait = btn.state === 'waiting';
+                      const color = isReady ? '#3fb950' : (isRun ? '#2f81f7' : (isWait ? '#d29922' : C.dim));
+                      const bg = isReady
+                        ? 'rgba(63,185,80,0.14)'
+                        : (isRun ? 'rgba(47,129,247,0.14)' : (isWait ? 'rgba(210,153,34,0.14)' : C.elevated));
+                      const borderColor = isReady
+                        ? 'rgba(63,185,80,0.6)'
+                        : (isRun ? 'rgba(47,129,247,0.6)' : (isWait ? 'rgba(210,153,34,0.6)' : C.border));
+                      return h('button', {
+                        type: 'button',
+                        disabled: btn.disabled,
+                        style: {
+                          ...S.statusBtn,
+                          color,
+                          background: bg,
+                          borderColor,
+                          opacity: btn.state === 'disabled' ? 0.55 : 1,
+                          cursor: btn.disabled ? 'not-allowed' : 'pointer',
+                          fontWeight: isReady ? 600 : 500,
+                        },
+                        title: btn.title,
+                        onMouseDown: (e) => e.stopPropagation(),
+                        onMouseEnter: (e) => { if (!btn.disabled) e.currentTarget.style.background = 'rgba(63,185,80,0.24)'; },
+                        onMouseLeave: (e) => { e.currentTarget.style.background = bg; },
+                        onClick: (e) => { e.stopPropagation(); if (!btn.disabled) runFromEntry(); },
+                      },
+                        isRun && h('span', {
+                          className: fxLevel !== 'minimal' ? 'dsh-wc-dot-live' : undefined,
+                          style: { width: '6px', height: '6px', borderRadius: '50%', background: color, flex: '0 0 auto' },
+                        }),
+                        btn.label,
+                      );
+                    })()
+                  : isDeadEnd
                   ? h('div', {
                       style: S.warnChip,
                       title: t('tipDeadEnd'),
@@ -3843,14 +4240,15 @@ window.__ModuleLoader__.load({
                           : isDone
                             ? 'rgba(63,185,80,0.14)'
                             : 'transparent';
-                      const statusLabel = isOrphan ? t('stOrphan')
-                        : isSoloLead ? t('stSoloLead')
-                          : isLeadReady ? t('stLeadReady')
-                            : isLeadDone ? t('stDone')
-                              : isLeadKind ? t('stLead')
-                                : nodeStatus === 'running' ? t('stRunning')
-                                  : nodeStatus === 'failed' ? t('stFailed')
-                                    : nodeStatus === 'done' ? t('stDone') : t('stPending');
+                      const statusLabel = isPruned ? t('stPruned')
+                        : isOrphan ? t('stOrphan')
+                          : isSoloLead ? t('stSoloLead')
+                            : isLeadReady ? t('stLeadReady')
+                              : isLeadDone ? t('stDone')
+                                : isLeadKind ? t('stLead')
+                                  : nodeStatus === 'running' ? t('stRunning')
+                                    : nodeStatus === 'failed' ? t('stFailed')
+                                      : nodeStatus === 'done' ? t('stDone') : t('stPending');
                       const glyph = nodeStatus === 'running'
                         ? h('span', {
                             className: fxLevel !== 'minimal' ? 'dsh-wc-dot-live' : undefined,
@@ -4088,6 +4486,44 @@ window.__ModuleLoader__.load({
                   onMouseDown: (e) => e.stopPropagation(),
                   onClick: () => deleteNode(node.id),
                 }, '×'),
+                verdictInfo && h('button', {
+                  type: 'button',
+                  style: {
+                    ...S.verdictChip,
+                    color: verdictInfo.tone === 'failed' ? '#e5534b' : (verdictInfo.tone === 'warn' ? '#d29922' : '#3fb950'),
+                    borderColor: verdictInfo.tone === 'failed' ? 'rgba(229,83,75,0.65)' : (verdictInfo.tone === 'warn' ? 'rgba(210,153,34,0.65)' : 'rgba(63,185,80,0.55)'),
+                  },
+                  title: (condDecision && condDecision.reason ? condDecision.reason + '\n' : '') + t('tipVerdictChip'),
+                  onMouseDown: (e) => e.stopPropagation(),
+                  onClick: (e) => {
+                    e.stopPropagation();
+                    setDecisionViewFor(decisionViewFor === node.id ? null : node.id);
+                  },
+                }, verdictInfo.text),
+                decisionViewFor === node.id && condDecision && h('div', {
+                  style: S.verdictPopover,
+                  onMouseDown: (e) => e.stopPropagation(),
+                },
+                  h('div', {
+                    style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '5px', fontWeight: 600, fontSize: '11px' },
+                  },
+                    h('span', null, t('verdictReasonTitle')),
+                    h('button', {
+                      type: 'button',
+                      style: { background: 'transparent', border: 'none', color: C.dim, cursor: 'pointer', fontSize: '12px', padding: '0 2px' },
+                      onClick: () => setDecisionViewFor(null),
+                    }, '×'),
+                  ),
+                  Array.isArray(condDecision.branchLabels) && condDecision.branchLabels.length > 0 && h('div', {
+                    style: { fontSize: '10px', color: '#3fb950', marginBottom: '4px' },
+                  }, t('verdictMatched') + condDecision.branchLabels.join(' · ')),
+                  condDecision.fallbackLead && h('div', {
+                    style: { fontSize: '10px', color: '#d29922', marginBottom: '4px' },
+                  }, t('verdictFallback') + condDecision.fallbackLead),
+                  h('div', {
+                    style: { maxHeight: '140px', overflowY: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: C.text, fontSize: '11px' },
+                  }, (condDecision.reason && String(condDecision.reason).trim()) || t('verdictNoReason')),
+                ),
                 renderBand(node),
               );
             }),
@@ -4126,7 +4562,7 @@ window.__ModuleLoader__.load({
           try { console.error('[workflow-canvas] apply failed', error); } catch (_e) { /* ignore */ }
         }
       },
-      __test: { topoOrder, wouldCycle, soloLeadNodeIds, layoutGraph, builtinTemplates, deadEndNodeIds, nextEffectLevel, nextMaxParallel, dropdownAlign, zoomAroundPoint, scrubZoom, buildPlan, loadDoc, saveDoc, storageKey, socketCenterY, nodeHeight, conditionBranchesForUI, distanceToEdge, edgeCurve },
+      __test: { topoOrder, wouldCycle, soloLeadNodeIds, layoutGraph, builtinTemplates, deadEndNodeIds, nextEffectLevel, nextMaxParallel, dropdownAlign, zoomAroundPoint, scrubZoom, buildPlan, loadDoc, saveDoc, storageKey, socketCenterY, nodeHeight, conditionBranchesForUI, distanceToEdge, edgeCurve, compatibleTargetsForWire, conditionVerdictSummary, entryRunButtonState },
     };
   },
 });

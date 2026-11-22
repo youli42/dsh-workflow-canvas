@@ -320,3 +320,59 @@ test('dropdownAlign flips to left-anchored when trigger wraps to the left edge o
   // Trigger sitting near right edge (310px from pane left -> right-align fits cleanly)
   assert.equal(client.dropdownAlign({ left: 378, right: 410 }, pane, 204), 'right');
 });
+
+test('compatibleTargetsForWire blocks Lead -> Lead and allows all targets from Subagent/Condition', () => {
+  const fromLead = client.compatibleTargetsForWire({ id: 'lead', kind: 'lead' }, 'prompt');
+  assert.equal(fromLead.agent, true);
+  assert.equal(fromLead.lead, false);
+  assert.equal(fromLead.condition, true);
+  assert.equal(fromLead.leadBlockedReason, 'leadToLeadBlocked');
+
+  const fromAgent = client.compatibleTargetsForWire({ id: 'n1', kind: 'agent' }, 'structured');
+  assert.deepEqual({ ...fromAgent }, { agent: true, lead: true, condition: true, leadBlockedReason: '' });
+
+  const fromCond = client.compatibleTargetsForWire({ id: 'c1', kind: 'condition' }, 'prompt');
+  assert.deepEqual({ ...fromCond }, { agent: true, lead: true, condition: true, leadBlockedReason: '' });
+});
+
+test('conditionVerdictSummary formats matched, unmatched, and failed verdicts in zh/en', () => {
+  assert.equal(client.conditionVerdictSummary(null, 'zh'), null);
+  assert.deepEqual(
+    { ...client.conditionVerdictSummary({ branches: ['c1', 'c2'], branchLabels: ['前端', '单测'], reason: '需同步改' }, 'zh') },
+    { tone: 'ok', text: '→ 前端 · 单测' },
+  );
+  assert.deepEqual(
+    { ...client.conditionVerdictSummary({ branches: [], branchLabels: [], fallbackLead: '终审' }, 'zh') },
+    { tone: 'warn', text: '⚠ 未命中 → 终审' },
+  );
+  assert.deepEqual(
+    { ...client.conditionVerdictSummary({ branches: [], branchLabels: [], failed: true, fallbackLead: 'Final Lead' }, 'en') },
+    { tone: 'failed', text: '⚠ Judge failed → Final Lead' },
+  );
+});
+
+test('entryRunButtonState covers ready, disabled (off/empty), running, and waitingLead states', () => {
+  const off = client.entryRunButtonState({ enabled: false, task: 'do x', sessionRunning: false, waitingLead: null, triggering: false, lang: 'zh' });
+  assert.equal(off.state, 'disabled');
+  assert.equal(off.disabled, true);
+  assert.ok(off.title.includes('ON'));
+
+  const empty = client.entryRunButtonState({ enabled: true, task: '   ', sessionRunning: false, waitingLead: null, triggering: false, lang: 'en' });
+  assert.equal(empty.state, 'disabled');
+  assert.equal(empty.disabled, true);
+  assert.ok(empty.title.includes('task'));
+
+  const ready = client.entryRunButtonState({ enabled: true, task: 'review code', sessionRunning: false, waitingLead: null, triggering: false, lang: 'zh' });
+  assert.equal(ready.state, 'ready');
+  assert.equal(ready.disabled, false);
+  assert.ok(ready.title.includes('retryFailed') && ready.title.includes('reset'));
+
+  const running = client.entryRunButtonState({ enabled: true, task: 'review code', sessionRunning: true, waitingLead: null, triggering: false, lang: 'zh' });
+  assert.equal(running.state, 'running');
+  assert.equal(running.disabled, true);
+
+  const waiting = client.entryRunButtonState({ enabled: true, task: 'review code', sessionRunning: false, waitingLead: { id: 'l2', label: '中审' }, triggering: false, lang: 'zh' });
+  assert.equal(waiting.state, 'waiting');
+  assert.equal(waiting.disabled, true);
+  assert.ok(waiting.title.includes('中审'));
+});

@@ -1393,3 +1393,73 @@ test('failed condition node never guesses a branch, hands off to nearest Lead or
   assert.deepEqual(spawned, ['run', 'gate']);
   assert.ok(rHalted.error.includes('自身执行失败') && rHalted.error.includes('retryFailed'));
 });
+
+test('executePlan publishes live run-state telemetry (.run.json) with condition verdicts and pruned nodes', async () => {
+  const { mkdtempSync, readFileSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-wc-runstate-'));
+  try {
+    const sid = 's-runstate-telemetry';
+    const scope = {
+      sessions: {
+        get(id) {
+          return id === sid ? { header: { cwd: dir } } : null;
+        },
+      },
+      subagents: {
+        startActivation(spec) {
+          const id = spec.label.split('#')[1];
+          if (id === 'gate') {
+            return Promise.resolve({
+              childId: 'kid-gate',
+              result: Promise.resolve({
+                status: 'completed',
+                structured: { branches: ['minor'], reason: '仅两处小修，无需重写' },
+                finalText: '',
+              }),
+            });
+          }
+          return Promise.resolve({
+            childId: 'kid-' + id,
+            result: Promise.resolve({ status: 'completed', finalText: 'done-' + id }),
+          });
+        },
+      },
+    };
+    const plan = {
+      task: 'telemetry test',
+      nodes: [
+        { id: 'scan', kind: 'agent', label: '扫描', role: '扫描' },
+        {
+          id: 'gate',
+          kind: 'condition',
+          label: '分级',
+          role: '按严重度分级',
+          branches: [
+            { id: 'minor', label: '小修' },
+            { id: 'rewrite', label: '重写' },
+          ],
+        },
+        { id: 'fix', kind: 'agent', label: '小修执行', role: '小修' },
+        { id: 'redo', kind: 'agent', label: '重写执行', role: '重写' },
+      ],
+      edges: [
+        { from: 'lead', to: 'scan', type: 'prompt' },
+        { from: 'scan', to: 'gate', type: 'prompt' },
+        { from: 'gate', to: 'fix', type: 'prompt', branch: 'minor' },
+        { from: 'gate', to: 'redo', type: 'prompt', branch: 'rewrite' },
+      ],
+    };
+    const res = await executePlan(scope, plan, {}, { agent: { id: sid }, signal: new AbortController().signal });
+    assert.equal(res.status, 'done');
+    const runFile = JSON.parse(readFileSync(join(dir, '.dsh', 'canvas', sid + '.run.json'), 'utf8'));
+    assert.equal(runFile.status, 'done');
+    assert.deepEqual(runFile.decisions.gate.branchLabels, ['小修']);
+    assert.equal(runFile.decisions.gate.reason, '仅两处小修，无需重写');
+    assert.deepEqual(runFile.pruned, ['redo']);
+    assert.ok(runFile.blockedEdges.some((k) => k.startsWith('gate->redo|')));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
