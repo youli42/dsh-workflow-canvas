@@ -50,7 +50,7 @@ Links only join matching types. Nodes the entry Lead cannot reach are skipped at
 ## Running
 
 1. The canvas must be enabled (the pill over the canvas); `canvas_workflow` refuses while it is disabled. While enabled, the host automatically injects a per-session runtime context reminder on each turn.
-2. You may pass `task` to override the entry Lead's task (handy when reusing a preset), `reset: true` to discard a paused run and start from scratch, and `clearMemory: true` to forget saved `keepSession` child sessions so every node starts fresh.
+2. You may pass `task` to override the entry Lead's task (handy when reusing a preset), `reset: true` to discard a paused run and start from scratch, `retryFailed: true` to reuse succeeded nodes and re-run only failed/empty/unfinished nodes plus their downstream, `fromNodes: [...]` to re-run from specific node ids/labels, `clearMemory: true` to forget saved `keepSession` child sessions, and `maxParallel` (1–8) to adjust concurrency.
 3. Solo chained Lead nodes (zero subagent upstream) and dangling dead-end subagents (zero outgoing edges while an active downstream Lead exists) are rendered dashed on the canvas and skipped at run time. Wiring a Lead + Subagent together into a downstream Lead is valid and active.
 4. Subagent capability (`preset: standard | minimal`) narrows the toolset within the main chat's permission ceiling; it cannot elevate past the parent session's sandbox/approval mode.
 3. Subagent nodes run in a dynamic concurrency pool of up to four: as soon as any node finishes, newly unblocked downstream subagents start immediately without waiting for slower siblings.

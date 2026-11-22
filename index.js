@@ -24,6 +24,8 @@ import { fileURLToPath } from 'node:url';
 const canvasBySession = new Map();
 /** In-flight run progress per Session id. */
 const runBySession = new Map();
+/** Snapshot of the last completed/halted run per Session id (enables partial retry). */
+const lastRunBySession = new Map();
 /**
  * Two separate maps by design:
  *   - `childByNode`: persisted memory slot written ONLY when `keepSession` is ON,
@@ -768,6 +770,17 @@ function buildActiveCanvasContext(sid) {
   if (stdCount >= 2) {
     lines.push('- 本画布包含 ' + stdCount + ' 个可写/命令型（standard）子代理，受主对话权限上限约束；若任务涉及改代码、写文件或跑终端命令且当前主对话权限偏严格，请先简短提醒用户放开主对话权限再调 `canvas_workflow`，避免中途报错白耗额度。');
   }
+  const prevRun = lastRunBySession.get(String(sid));
+  if (prevRun) {
+    const badNames = [
+      ...Object.values(prevRun.failed || {}).map((f) => f.label || f.id),
+      ...Object.values(prevRun.emptyOutputs || {}).map((e) => e.label || e.id),
+    ].filter((v, i, arr) => v && arr.indexOf(v) === i);
+    if (prevRun.halted || badNames.length) {
+      lines.push('- 上次运行存在失败/熔断节点（' + (badNames.join('、') || '部分未完成')
+        + '）：若用户要求只重跑失败部分或继续未完成段，请调用 `canvas_workflow({ retryFailed: true })` 局部续跑（自动复用已成功节点缓存，零重复消耗）；也可传 `fromNodes: ["节点id"]` 指定从某个节点开始重跑。');
+    }
+  }
   return lines.join('\n');
 }
 
@@ -823,18 +836,87 @@ async function executePlan(scope, plan, args, exec) {
   }
   if (opts.reset === true && sid) {
     runBySession.delete(sid);
+    lastRunBySession.delete(sid);
   }
 
+  const byId = new Map(runnable.map((n) => [n.id, n]));
+  const labelOf = new Map(order.map((n) => [n.id, n.label || n.id]));
   const sig = JSON.stringify(plan);
   let state = runBySession.get(sid);
+  const wantRetryFailed = opts.retryFailed === true;
+  const rawFromNodes = Array.isArray(opts.fromNodes) ? opts.fromNodes.filter((x) => typeof x === 'string' && x.trim()) : [];
+  const wantPartial = wantRetryFailed || rawFromNodes.length > 0;
+  let reused = [];
+
+  if (wantPartial && sid) {
+    const base = state || lastRunBySession.get(sid);
+    if (base) {
+      state = {
+        sig,
+        done: new Set(Array.from(base.done || []).filter((id) => byId.has(id))),
+        results: { ...(base.results || {}) },
+        labels: { ...(base.labels || {}) },
+        failed: { ...(base.failed || {}) },
+        emptyOutputs: { ...(base.emptyOutputs || {}) },
+        waitingLead: null,
+      };
+      // Build forward adjacency to invalidate seed nodes and all their downstream dependents.
+      const fwd = new Map();
+      for (const e of plan.edges || []) {
+        if (!e || !e.from || !e.to) continue;
+        if (!fwd.has(e.from)) fwd.set(e.from, []);
+        fwd.get(e.from).push(e.to);
+      }
+      const seeds = new Set();
+      if (wantRetryFailed) {
+        for (const id of Object.keys(state.failed)) seeds.add(id);
+        for (const id of Object.keys(state.emptyOutputs)) seeds.add(id);
+      }
+      for (const ref of rawFromNodes) {
+        const trimmed = ref.trim();
+        if (byId.has(trimmed)) seeds.add(trimmed);
+        else {
+          const match = runnable.find((n) => n.label === trimmed);
+          if (match) seeds.add(match.id);
+        }
+      }
+      const invalid = new Set(seeds);
+      const q = Array.from(seeds);
+      for (let i = 0; i < q.length; i += 1) {
+        for (const next of fwd.get(q[i]) || []) {
+          if (!invalid.has(next)) { invalid.add(next); q.push(next); }
+        }
+      }
+      for (const id of invalid) {
+        state.done.delete(id);
+        delete state.results[id];
+        delete state.labels[id];
+        delete state.failed[id];
+        delete state.emptyOutputs[id];
+      }
+      reused = Array.from(state.done).map((id) => labelOf.get(id) || id);
+      runBySession.set(sid, state);
+    }
+  }
+
   if (!state || state.sig !== sig) {
     state = { sig, done: new Set(), results: {}, labels: {}, failed: {}, emptyOutputs: {}, waitingLead: null };
     runBySession.set(sid, state);
   }
   if (!state.emptyOutputs) state.emptyOutputs = {};
 
-  const byId = new Map(runnable.map((n) => [n.id, n]));
-  const labelOf = new Map(order.map((n) => [n.id, n.label || n.id]));
+  const snapshotLastRun = (haltedFlag) => {
+    if (!sid) return;
+    lastRunBySession.set(sid, {
+      sig: state.sig,
+      done: new Set(state.done),
+      results: { ...state.results },
+      labels: { ...state.labels },
+      failed: { ...state.failed },
+      emptyOutputs: { ...state.emptyOutputs },
+      halted: Boolean(haltedFlag),
+    });
+  };
   const depsOf = (node) => (plan.edges || [])
     .filter((e) => e.to === node.id && e.from !== 'lead')
     .map((e) => e.from)
@@ -880,20 +962,23 @@ async function executePlan(scope, plan, args, exec) {
     // but let already in-flight siblings settle so no orphan promises or partial
     // results are dropped before returning the halted report.
     if (haltedReason && inFlight.size === 0) {
+      snapshotLastRun(true);
       if (sid) runBySession.delete(sid);
       saveStore();
       return {
         status: 'halted',
-        error: haltedReason,
+        error: haltedReason + '（放开权限后可调用 canvas_workflow({ retryFailed: true }) 只重跑失败与未完成节点）',
         results: state.results,
         labels: state.labels,
         failed: Object.values(state.failed),
         emptyOutputs: Object.values(state.emptyOutputs),
+        reused,
         skipped,
       };
     }
     const remaining = runnable.filter((n) => !state.done.has(n.id));
     if (!remaining.length) {
+      snapshotLastRun(false);
       runBySession.delete(sid);
       saveStore();
       return {
@@ -902,6 +987,7 @@ async function executePlan(scope, plan, args, exec) {
         labels: state.labels,
         failed: Object.values(state.failed),
         emptyOutputs: Object.values(state.emptyOutputs),
+        reused,
         skipped,
       };
     }
@@ -951,6 +1037,7 @@ async function executePlan(scope, plan, args, exec) {
     if (!hasDownstreamWork && leadResult === undefined) {
       // Terminal Lead: zero downstream nodes remain, so complete the run directly
       // and hand off final review/delivery to the Lead without a redundant extra turn.
+      snapshotLastRun(false);
       if (sid) runBySession.delete(sid);
       saveStore();
       return {
@@ -965,6 +1052,7 @@ async function executePlan(scope, plan, args, exec) {
         failed: Object.values(state.failed),
         emptyOutputs: Object.values(state.emptyOutputs),
         sessions: leadSessions,
+        reused,
         skipped,
         hint: '所有子代理已完成。最后一步由你（Lead 本体）按要求完成终审/汇总后直接向用户交付即可，无需再次调用 canvas_workflow。',
       };
@@ -1196,6 +1284,7 @@ export function apply(ctx) {
                   },
                 });
                 runBySession.delete(sid);
+                lastRunBySession.delete(sid);
                 saveStore();
               }
               return { canvas, delivered, warnings };
@@ -1359,6 +1448,8 @@ export function apply(ctx) {
               leadResult: { type: 'string', description: 'Your own output for the Lead step that was just requested.' },
               task: { type: 'string', description: 'Optional overall task overriding the entry Lead task for this run (useful for reusing a preset).' },
               reset: { type: 'boolean', description: 'Discard any paused run progress and start from the beginning.' },
+              retryFailed: { type: 'boolean', description: 'Reuse succeeded nodes from the previous run and re-run only failed, empty, or unfinished nodes along with their downstream.' },
+              fromNodes: { type: 'array', items: { type: 'string' }, description: 'Re-run only the specified node ids (or labels) and their downstream, reusing all other succeeded nodes from the previous run.' },
               clearMemory: { type: 'boolean', description: 'Forget saved subagent sessions (keepSession memory) for this session before running so every node starts fresh.' },
               maxParallel: { type: 'integer', minimum: 1, maximum: 8, description: 'Optional concurrency limit override (1–8, default 4).' },
             },
@@ -1376,6 +1467,7 @@ export function apply(ctx) {
                 failed: { type: 'array' },
                 emptyOutputs: { type: 'array' },
                 sessions: { type: 'array' },
+                reused: { type: 'array' },
                 skipped: { type: 'array' },
                 hint: { type: 'string' },
                 error: { type: 'string' },
@@ -1420,6 +1512,9 @@ export function apply(ctx) {
                 const skip = Array.isArray(v.skipped) && v.skipped.length
                   ? '\n\n已跳过（未连线）：' + v.skipped.join('、')
                   : '';
+                const reusedNote = Array.isArray(v.reused) && v.reused.length
+                  ? '\n\n已复用上次成功缓存（未重复消耗）：' + v.reused.join('、')
+                  : '';
                 if (v.finalLead) {
                   const fl = v.finalLead;
                   const handed = Array.isArray(v.sessions) ? v.sessions.filter((s) => s && s.childId) : [];
@@ -1435,11 +1530,12 @@ export function apply(ctx) {
                       + emptyList
                       + '\n\n已完成节点的结果：\n' + body
                       + handover
+                      + reusedNote
                       + skip
                       + '\n\n' + (v.hint || ''),
                   }];
                 }
-                return [{ type: 'text', text: '画布执行完成。' + failedList + emptyList + '\n\n' + body + skip }];
+                return [{ type: 'text', text: '画布执行完成。' + failedList + emptyList + '\n\n' + body + reusedNote + skip }];
               }
               return [{ type: 'text', text: JSON.stringify(v) }];
             },

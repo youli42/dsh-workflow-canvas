@@ -891,3 +891,61 @@ test('executePlan honors configurable maxParallel limit from plan or args', asyn
   await executePlan(scope, { task: 'wide', maxParallel: 6, nodes, edges }, {}, { agent: { id: 's-mp6' }, signal: new AbortController().signal });
   assert.equal(peak, 6);
 });
+
+test('retryFailed and fromNodes reuse succeeded nodes and re-run only failed/target nodes plus downstream', async () => {
+  let failB = true;
+  const spawned = [];
+  const scope = {
+    subagents: {
+      startActivation(spec) {
+        const id = spec.label.split('#')[1];
+        spawned.push(id);
+        if (id === 'b' && failB) {
+          return Promise.reject(new Error('transient error'));
+        }
+        return Promise.resolve({
+          childId: 'kid-' + id + '-' + spawned.length,
+          result: Promise.resolve({ output: [{ type: 'text', text: 'out:' + id + '#' + spawned.length }], stopReason: 'completed' }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+  const sid = 's-partial-retry';
+  const plan = {
+    task: '局部重跑测试',
+    nodes: [
+      { id: 'a', kind: 'agent', label: '节点A', role: 'A' },
+      { id: 'b', kind: 'agent', label: '节点B', role: 'B' },
+      { id: 'c', kind: 'agent', label: '下游C', role: 'C' },
+    ],
+    edges: [
+      { from: 'lead', to: 'a', type: 'prompt' },
+      { from: 'lead', to: 'b', type: 'prompt' },
+      { from: 'a', to: 'c', type: 'prompt' },
+      { from: 'b', to: 'c', type: 'prompt' },
+    ],
+  };
+
+  // Run 1: a succeeds, b fails, c runs with warning
+  const r1 = await executePlan(scope, plan, {}, { agent: { id: sid }, signal: new AbortController().signal });
+  assert.equal(r1.status, 'done');
+  assert.equal(r1.failed.length, 1);
+  assert.equal(r1.failed[0].id, 'b');
+
+  // Run 2: fix b and call retryFailed -> a is REUSED (not spawned), only b and downstream c re-run!
+  spawned.length = 0;
+  failB = false;
+  const r2 = await executePlan(scope, plan, { retryFailed: true }, { agent: { id: sid }, signal: new AbortController().signal });
+  assert.equal(r2.status, 'done');
+  assert.equal(r2.failed.length, 0);
+  assert.deepEqual(spawned, ['b', 'c'], 'node a must be reused from cache without re-spawning');
+  assert.deepEqual(r2.reused, ['节点A']);
+
+  // Run 3: fromNodes=['下游C'] -> reuses both a and b, re-runs only c!
+  spawned.length = 0;
+  const r3 = await executePlan(scope, plan, { fromNodes: ['下游C'] }, { agent: { id: sid }, signal: new AbortController().signal });
+  assert.equal(r3.status, 'done');
+  assert.deepEqual(spawned, ['c']);
+  assert.deepEqual(r3.reused.sort(), ['节点A', '节点B']);
+});
