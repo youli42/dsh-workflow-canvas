@@ -1,4 +1,6 @@
 window.__ModuleLoader__.load({
+  // Must stay identical to the published package name; DSH matches the sidebar
+  // client bundle by this id and silently skips loading if it drifts.
   id: 'dsh-workflow-canvas',
   factory(require) {
     const React = require('react');
@@ -42,6 +44,8 @@ window.__ModuleLoader__.load({
 
     const FX_KEY = STORAGE_PREFIX + 'fx';
     const FX_LEVELS = ['minimal', 'standard', 'vivid'];
+    const PARALLEL_KEY = STORAGE_PREFIX + 'maxParallel';
+    const PARALLEL_STEPS = [1, 2, 4, 6, 8];
     const STYLE_ID = 'dsh-workflow-canvas-styles';
 
     /** Inject scoped CSS keyframes once; never touches host selectors. */
@@ -184,6 +188,8 @@ window.__ModuleLoader__.load({
         fxMinimal: '极简',
         fxStandard: '标准',
         fxVivid: '炫酷',
+        maxParallelLabel: '最大并发',
+        tipMaxParallel: '默认 4 路并行（可选 1 / 2 / 4 / 6 / 8）。并发过高容易触发 API 限流（429）、增加多子代理同时写同一工作区的文件冲突，并放大单轮报错时的额度消耗；纯只读调研可适当调高。',
         tipLeadReady: '上游节点已全部完成，正等待在对话里拍板继续',
         stDeadEnd: '无出边',
         tipDeadEnd: '该子代理没有下游连线，运行时不生效；请连入下游节点或终审 Lead',
@@ -294,6 +300,8 @@ window.__ModuleLoader__.load({
         fxMinimal: 'Minimal',
         fxStandard: 'Standard',
         fxVivid: 'Vivid',
+        maxParallelLabel: 'Max parallel',
+        tipMaxParallel: 'Default 4 concurrent subagents (1 / 2 / 4 / 6 / 8). Higher concurrency can trigger API rate limits (429), increase workspace file-edit conflicts, and widen token spend on failure; raising it is safest for read-only research.',
         tipLeadReady: 'Upstream steps are done; waiting for Lead in chat',
         stDeadEnd: 'No out-link',
         tipDeadEnd: 'This subagent has no outgoing link and is skipped at run time; wire it into a downstream node or Lead',
@@ -1043,7 +1051,7 @@ window.__ModuleLoader__.load({
     }
 
     /** Everything the Host executor needs; no prompts are pre-rendered here. */
-    function buildPlan(nodes, edges) {
+    function buildPlan(nodes, edges, opts) {
       const entry = nodes.find((n) => n.id === 'lead');
       if (!entry) return { error: '缺少入口 Lead 节点' };
       const task = String(entry.task || '').trim();
@@ -1067,9 +1075,14 @@ window.__ModuleLoader__.load({
         .filter((e) => (e.from === 'lead' || activeIds.has(e.from)) && activeIds.has(e.to))
         .map((e) => ({ from: e.from, to: e.to, type: e.type || 'prompt' }));
 
+      const maxParallel = opts && Number.isFinite(Number(opts.maxParallel))
+        ? Math.max(1, Math.min(8, Math.floor(Number(opts.maxParallel))))
+        : 4;
+
       return {
         plan: {
           task,
+          maxParallel,
           skipped: skipped.map((n) => n.label || n.id),
           nodes: active.map((n) => ({
             id: n.id,
@@ -1127,6 +1140,25 @@ window.__ModuleLoader__.load({
     function nextEffectLevel(cur) {
       const idx = FX_LEVELS.indexOf(cur);
       return FX_LEVELS[(idx + 1) % FX_LEVELS.length];
+    }
+
+    function loadMaxParallel() {
+      try {
+        const raw = Number(window.localStorage.getItem(PARALLEL_KEY));
+        if (Number.isFinite(raw) && raw >= 1 && raw <= 8) return Math.floor(raw);
+      } catch (_e) { /* ignore */ }
+      return 4;
+    }
+
+    function saveMaxParallel(n) {
+      try {
+        if (Number.isFinite(n) && n >= 1 && n <= 8) window.localStorage.setItem(PARALLEL_KEY, String(Math.floor(n)));
+      } catch (_e) { /* ignore */ }
+    }
+
+    function nextMaxParallel(cur) {
+      const idx = PARALLEL_STEPS.indexOf(Number(cur));
+      return PARALLEL_STEPS[(idx + 1) % PARALLEL_STEPS.length];
     }
 
     /** Compute the next `{ k, x, y }` keeping the content point under `(mx, my)` fixed. */
@@ -1259,6 +1291,9 @@ window.__ModuleLoader__.load({
       const [helpOpen, setHelpOpen] = useState(false);
       const [cutMode, setCutMode] = useState(loadCutMode);
       const [fxLevel, setFxLevel] = useState(loadEffectLevel);
+      const [maxParallel, setMaxParallel] = useState(loadMaxParallel);
+      const maxParallelRef = useRef(maxParallel);
+      maxParallelRef.current = maxParallel;
       useEffect(() => { ensureStyles(); }, []);
       const cutRef = useRef(null);
       /** Timestamp of the remote document being applied, so saving it does not bump the clock. */
@@ -1321,8 +1356,12 @@ window.__ModuleLoader__.load({
         saveDoc(sessionId, { nodes, edges, enabled }, stamp === null ? undefined : stamp);
       }, [sessionId, nodes, edges, enabled]);
 
-      const planSig = (nextEnabled, curNodes, curEdges) => {
-        const res = buildPlan(curNodes, curEdges);
+      // Plan signature excludes visual (x, y) coordinates so dragging nodes does
+      // not trigger false "unsaved changes" warnings; `skipDirtyOnce` suppresses
+      // the dirty flag when applying a canvas written by the Host itself.
+      const planSig = (nextEnabled, curNodes, curEdges, overrideParallel) => {
+        const mp = typeof overrideParallel === 'number' ? overrideParallel : maxParallelRef.current;
+        const res = buildPlan(curNodes, curEdges, { maxParallel: mp });
         const payload = res.error
           ? { enabled: nextEnabled, error: res.error }
           : { enabled: nextEnabled, plan: res.plan };
@@ -1386,13 +1425,13 @@ window.__ModuleLoader__.load({
       // Publishing costs one visible command row in the conversation, so it only
       // happens when the user enables the canvas, loads a preset/import, clears,
       // or asks for it explicitly.
-      const pushPlan = (nextEnabled, overrideNodes, overrideEdges) => {
+      const pushPlan = (nextEnabled, overrideNodes, overrideEdges, overrideParallel) => {
         try {
           const face = sessionFace(sessionId);
           if (!face || typeof face.command !== 'function') { flash(t('syncFailed')); return; }
           const curNodes = Array.isArray(overrideNodes) ? overrideNodes : nodesRef.current;
           const curEdges = Array.isArray(overrideEdges) ? overrideEdges : edgesRef.current;
-          const sig = planSig(nextEnabled, curNodes, curEdges);
+          const sig = planSig(nextEnabled, curNodes, curEdges, overrideParallel);
           if (sig === lastSync.current) { setDirty(false); flash(t('upToDate')); return; }
           const line = '/canvas-sync ' + encodeURIComponent(sig);
           const hasStandardAgent = nextEnabled && curNodes.some((n) => n && n.kind !== 'lead' && (n.preset || 'standard') !== 'minimal');
@@ -2791,9 +2830,12 @@ window.__ModuleLoader__.load({
       const soloLeadIds = soloLeadNodeIds(nodes, edges);
       const deadEndIds = deadEndNodeIds(nodes, edges);
 
-      // Identify intermediate Lead nodes waiting for a decision ("Ready for Lead")
-      // and terminal Lead nodes: a terminal Lead glows only while the conversation
-      // is still streaming its final review; once the turn finishes it settles to Done.
+      // Lead nodes are never spawned, so their status is derived from graph state:
+      // - Intermediate Lead (has downstream): glows "Ready" until any child starts,
+      //   then settles to "Done".
+      // - Terminal Lead (no downstream): Host finishes in one shot, so it glows only
+      //   while the main conversation is still streaming (`sessionRunning`), then
+      //   settles to "Done" once the turn ends.
       const leadReadyIds = new Set();
       const leadDoneIds = new Set();
       if (enabled) {
@@ -3049,6 +3091,32 @@ window.__ModuleLoader__.load({
                   flash(t('fxLabel') + t('sep') + fxName(next));
                 },
               }, t('fxLabel') + t('sep') + fxName(fxLevel)),
+              h('div', {
+                style: { ...S.moreRow, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' },
+                title: t('tipMaxParallel'),
+                onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+                onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+                onClick: () => {
+                  const next = nextMaxParallel(maxParallel);
+                  setMaxParallel(next);
+                  maxParallelRef.current = next;
+                  saveMaxParallel(next);
+                  if (enabled) pushPlan(true, undefined, undefined, next);
+                  else flash(t('maxParallelLabel') + t('sep') + next);
+                },
+              },
+                h('span', null, t('maxParallelLabel') + t('sep') + maxParallel),
+                h('span', {
+                  title: t('tipMaxParallel'),
+                  style: {
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    width: '14px', height: '14px', borderRadius: '50%',
+                    border: '1px solid ' + (maxParallel > 4 ? '#d29922' : C.dim),
+                    color: maxParallel > 4 ? '#d29922' : C.dim,
+                    fontSize: '10px', fontWeight: 700, lineHeight: '12px', flex: '0 0 auto',
+                  },
+                }, '!'),
+              ),
               h('div', {
                 style: S.moreRow,
                 onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
@@ -3477,7 +3545,7 @@ window.__ModuleLoader__.load({
           try { console.error('[workflow-canvas] apply failed', error); } catch (_e) { /* ignore */ }
         }
       },
-      __test: { topoOrder, wouldCycle, soloLeadNodeIds, layoutGraph, builtinTemplates, deadEndNodeIds, nextEffectLevel, zoomAroundPoint, scrubZoom, buildPlan, loadDoc, saveDoc, storageKey, socketCenterY, distanceToEdge, edgeCurve },
+      __test: { topoOrder, wouldCycle, soloLeadNodeIds, layoutGraph, builtinTemplates, deadEndNodeIds, nextEffectLevel, nextMaxParallel, zoomAroundPoint, scrubZoom, buildPlan, loadDoc, saveDoc, storageKey, socketCenterY, distanceToEdge, edgeCurve },
     };
   },
 });

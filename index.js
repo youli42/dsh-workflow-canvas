@@ -24,9 +24,14 @@ import { fileURLToPath } from 'node:url';
 const canvasBySession = new Map();
 /** In-flight run progress per Session id. */
 const runBySession = new Map();
-/** node id → child session id, so `keepSession` can resume previous work. */
+/**
+ * Two separate maps by design:
+ *   - `childByNode`: persisted memory slot written ONLY when `keepSession` is ON,
+ *     so temporary `keepSession=false` runs never overwrite saved memory.
+ *   - `liveChild`: latest child id in this process (updated even when Memory is OFF)
+ *     so downstream `session-ref` purple links can always continue the upstream run.
+ */
 const childByNode = new Map();
-/** node id → child id created in this process, safe to resume. */
 const liveChild = new Map();
 
 function storePath() {
@@ -716,8 +721,9 @@ function sessionIdFromContext(assembleCtx) {
 
 /**
  * Per-turn runtime prompt context injected ONLY for the session whose canvas is
- * currently enabled. Returns '' for disabled canvases, unrelated sessions, and
- * subagent sessions (zero token overhead and no recursive triggering).
+ * currently enabled. DSH invokes `systemPrompt.context` for both main chats AND
+ * spawned subagents, so strict `sid` matching (returning '' on miss) is required
+ * to prevent leaking canvas instructions into subagents and causing recursion.
  */
 function buildActiveCanvasContext(sid) {
   if (!sid) return '';
@@ -835,7 +841,10 @@ async function executePlan(scope, plan, args, exec) {
     .filter((id) => byId.has(id));
 
   let leadResult = typeof opts.leadResult === 'string' ? opts.leadResult : undefined;
-  const MAX_PARALLEL = 4;
+  const rawMaxParallel = opts.maxParallel !== undefined ? opts.maxParallel : plan.maxParallel;
+  const MAX_PARALLEL = Number.isFinite(Number(rawMaxParallel))
+    ? Math.max(1, Math.min(8, Math.floor(Number(rawMaxParallel))))
+    : 4;
   // Event-driven concurrency pool: as soon as any node finishes, newly unblocked
   // downstream agents start immediately instead of waiting for slower siblings.
   const inFlight = new Map();
@@ -867,6 +876,9 @@ async function executePlan(scope, plan, args, exec) {
       if (sid) runBySession.delete(sid);
       return { error: '工作流执行已取消。' };
     }
+    // On circuit-break halt, stop launching new downstream waves immediately,
+    // but let already in-flight siblings settle so no orphan promises or partial
+    // results are dropped before returning the halted report.
     if (haltedReason && inFlight.size === 0) {
       if (sid) runBySession.delete(sid);
       saveStore();
@@ -1348,6 +1360,7 @@ export function apply(ctx) {
               task: { type: 'string', description: 'Optional overall task overriding the entry Lead task for this run (useful for reusing a preset).' },
               reset: { type: 'boolean', description: 'Discard any paused run progress and start from the beginning.' },
               clearMemory: { type: 'boolean', description: 'Forget saved subagent sessions (keepSession memory) for this session before running so every node starts fresh.' },
+              maxParallel: { type: 'integer', minimum: 1, maximum: 8, description: 'Optional concurrency limit override (1–8, default 4).' },
             },
             additionalProperties: false,
           },

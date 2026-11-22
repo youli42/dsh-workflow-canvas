@@ -858,3 +858,36 @@ test('memoryChildId pins a specific past session and temporary keepSession=false
 
   assert.deepEqual(seenChildIds, [null, null, 'kid-pick-1', 'kid-pick-2']);
 });
+
+test('executePlan honors configurable maxParallel limit from plan or args', async () => {
+  let active = 0;
+  let peak = 0;
+  const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+  const scope = {
+    subagents: {
+      startActivation(spec) {
+        active += 1;
+        peak = Math.max(peak, active);
+        return Promise.resolve({
+          childId: 'kid-' + spec.label,
+          result: delay(20).then(() => {
+            active -= 1;
+            return { output: [{ type: 'text', text: 'ok' }], stopReason: 'completed' };
+          }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+  const nodes = [1, 2, 3, 4, 5, 6].map((i) => ({ id: 'p' + i, kind: 'agent', label: 'P' + i, role: 'r' }));
+  const edges = nodes.map((n) => ({ from: 'lead', to: n.id, type: 'prompt' }));
+
+  // maxParallel = 1 -> strictly serial
+  await executePlan(scope, { task: 'serial', maxParallel: 1, nodes, edges }, {}, { agent: { id: 's-mp1' }, signal: new AbortController().signal });
+  assert.equal(peak, 1);
+
+  // maxParallel = 6 -> all 6 run concurrently
+  peak = 0;
+  await executePlan(scope, { task: 'wide', maxParallel: 6, nodes, edges }, {}, { agent: { id: 's-mp6' }, signal: new AbortController().signal });
+  assert.equal(peak, 6);
+});

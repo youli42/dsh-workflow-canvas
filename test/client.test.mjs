@@ -184,6 +184,20 @@ test('nextEffectLevel cycles minimal -> standard -> vivid -> minimal', () => {
   assert.equal(client.nextEffectLevel('vivid'), 'minimal');
 });
 
+test('nextMaxParallel cycles 1 -> 2 -> 4 -> 6 -> 8 -> 1 and buildPlan carries maxParallel', () => {
+  assert.equal(client.nextMaxParallel(1), 2);
+  assert.equal(client.nextMaxParallel(2), 4);
+  assert.equal(client.nextMaxParallel(4), 6);
+  assert.equal(client.nextMaxParallel(6), 8);
+  assert.equal(client.nextMaxParallel(8), 1);
+  const built = client.buildPlan(
+    [{ id: 'lead', kind: 'lead', task: 't' }, { id: 'a', kind: 'agent', label: 'A' }],
+    [{ from: 'lead', to: 'a', type: 'prompt' }],
+    { maxParallel: 6 },
+  );
+  assert.equal(built.plan.maxParallel, 6);
+});
+
 test('zoomAroundPoint keeps the content point under cursor pinned across rapid ticks', () => {
   const start = { k: 0.75, x: -1200, y: -1100 };
   const mx = 340;
