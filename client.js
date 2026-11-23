@@ -106,7 +106,7 @@ window.__ModuleLoader__.load({
         addAgent: '+ 子代理', addLead: '+ Lead', addCond: '+ 条件', undo: '↶ 撤销', sync: '↥ 同步',
         enabled: '● 已启用', disabled: '○ 已禁用', presetName: '预设名', save: '☆ 保存',
         presets: '☰ 预设', unsaved: '有未同步改动', synced: '已同步',
-        pickModel: '选择模型', defaultEffort: '默认',
+        pickModel: '选择模型', loadingModels: '加载中…', defaultEffort: '默认',
         leadThis: 'Lead（本对话）',
         tipSocketOut: '通用输入口（接收 prompt / structured / session / 条件分支）；拖出可断开最近一条连线',
         tipSocketIn: '从这里拖出连线 / 也可以把输入口拖到这里',
@@ -250,7 +250,7 @@ window.__ModuleLoader__.load({
         addAgent: '+ Subagent', addLead: '+ Lead', addCond: '+ Condition', undo: '↶ Undo', sync: '↥ Sync',
         enabled: '● ON', disabled: '○ OFF', presetName: 'Preset name', save: '☆ Save',
         presets: '☰ Presets', unsaved: 'Unsaved changes', synced: 'Synced',
-        pickModel: 'Pick a model', defaultEffort: 'default',
+        pickModel: 'Pick a model', loadingModels: 'Loading…', defaultEffort: 'default',
         leadThis: 'Lead (this chat)',
         tipSocketOut: 'Universal input (accepts prompt / structured / session / branch); drag away to detach latest link',
         tipSocketIn: 'Drag out to link, or drop an input here',
@@ -411,7 +411,9 @@ window.__ModuleLoader__.load({
       dim: 'var(--dsw-alias-label-tertiary, rgba(140,140,140,0.95))',
       border: 'var(--dsw-alias-border-l2, rgba(128,128,128,0.4))',
       raised: 'var(--dsw-alias-bg-layer-1, rgba(128,128,128,0.10))',
-      elevated: 'var(--dsw-alias-bg-elevated, #2a2b2f)',
+      // Chain through host surface tokens before falling back to CSS Canvas so popups
+      // stay readable in both light and dark themes (never hardcode a dark hex fallback).
+      elevated: 'var(--dsw-alias-bg-elevated, var(--dsw-alias-bg-popover, var(--dsw-alias-bg-layer-2, var(--dsw-alias-bg-base, Canvas))))',
       base: 'var(--dsw-alias-bg-base, transparent)',
       hover: 'var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,0.18))',
       accent: 'var(--dsw-alias-brand-primary, #2f81f7)',
@@ -473,8 +475,8 @@ window.__ModuleLoader__.load({
       moreBar: { position: 'relative', flex: '0 0 auto' },
       moreMenu: {
         position: 'absolute', right: 0, top: '100%', marginTop: '4px', minWidth: '190px',
-        background: C.elevated, border: '1px solid ' + C.border, borderRadius: '6px',
-        zIndex: 80, padding: '4px', boxShadow: '0 10px 26px rgba(0,0,0,0.45)',
+        background: C.elevated, color: C.text, border: '1px solid ' + C.border, borderRadius: '6px',
+        zIndex: 80, padding: '4px', boxShadow: '0 10px 26px rgba(0,0,0,0.28)',
       },
       moreRow: {
         padding: '5px 8px', borderRadius: '4px', fontSize: '11px', cursor: 'pointer',
@@ -482,8 +484,8 @@ window.__ModuleLoader__.load({
       },
       addMenu: {
         position: 'absolute', minWidth: '164px',
-        background: C.elevated, border: '1px solid ' + C.border, borderRadius: '7px',
-        zIndex: 85, padding: '4px', boxShadow: '0 12px 30px rgba(0,0,0,0.5)',
+        background: C.elevated, color: C.text, border: '1px solid ' + C.border, borderRadius: '7px',
+        zIndex: 85, padding: '4px', boxShadow: '0 12px 30px rgba(0,0,0,0.28)',
       },
       addMenuHead: {
         padding: '4px 8px 3px', fontSize: '10px', color: C.dim,
@@ -506,8 +508,8 @@ window.__ModuleLoader__.load({
       },
       helpCard: {
         width: '100%', maxWidth: '420px', maxHeight: '100%', overflow: 'auto',
-        background: C.elevated, border: '1px solid ' + C.border, borderRadius: '8px',
-        boxShadow: '0 16px 40px rgba(0,0,0,0.5)', padding: '12px',
+        background: C.elevated, color: C.text, border: '1px solid ' + C.border, borderRadius: '8px',
+        boxShadow: '0 16px 40px rgba(0,0,0,0.32)', padding: '12px',
       },
       helpHead: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' },
       helpTitle: { flex: '1 1 auto', fontSize: '13px', fontWeight: 600, color: C.text },
@@ -520,9 +522,9 @@ window.__ModuleLoader__.load({
       presetRowTop: { display: 'flex', alignItems: 'center', gap: '5px' },
       presetMenu: {
         position: 'absolute', right: 0, top: '100%', marginTop: '4px', minWidth: '236px',
-        maxHeight: '320px', overflowY: 'auto', background: C.elevated,
+        maxHeight: '320px', overflowY: 'auto', background: C.elevated, color: C.text,
         border: '1px solid ' + C.border, borderRadius: '6px', zIndex: 60, padding: '6px',
-        boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+        boxShadow: '0 8px 24px rgba(0,0,0,0.28)',
       },
       presetSaveBox: {
         padding: '2px 2px 8px', marginBottom: '6px',
@@ -649,8 +651,8 @@ window.__ModuleLoader__.load({
       },
       rolePopover: {
         position: 'absolute', left: '100%', top: '0', marginLeft: '8px', width: '280px',
-        background: C.elevated, border: '1px solid ' + C.border, borderRadius: '8px',
-        boxShadow: '0 10px 26px rgba(0,0,0,0.45)', padding: '8px', zIndex: 70,
+        background: C.elevated, color: C.text, border: '1px solid ' + C.border, borderRadius: '8px',
+        boxShadow: '0 10px 26px rgba(0,0,0,0.28)', padding: '8px', zIndex: 70,
       },
       roleArea: {
         width: '100%', height: '150px', boxSizing: 'border-box', resize: 'vertical',
@@ -732,13 +734,13 @@ window.__ModuleLoader__.load({
       caret: { flex: '0 0 auto', color: C.dim, fontSize: '9px' },
       menu: {
         position: 'absolute', left: 0, right: 0, top: '100%', marginTop: '4px',
-        maxHeight: '220px', overflowY: 'auto', background: C.elevated,
+        maxHeight: '220px', overflowY: 'auto', background: C.elevated, color: C.text,
         border: '1px solid ' + C.border, borderRadius: '6px',
-        boxShadow: '0 8px 24px rgba(0,0,0,0.4)', zIndex: 50, padding: '4px',
+        boxShadow: '0 8px 24px rgba(0,0,0,0.28)', zIndex: 50, padding: '4px',
       },
       menuRow: {
         padding: '3px 7px', borderRadius: '4px', fontSize: '10px', cursor: 'pointer',
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
       },
       menuHead: { padding: '6px 8px 2px', fontSize: '10px', color: C.dim, textTransform: 'uppercase', letterSpacing: '0.04em' },
 
@@ -784,6 +786,7 @@ window.__ModuleLoader__.load({
     };
 
     let hostCtx = null;
+    let cachedModels = [];
 
     function socketCenterY(i) {
       return SOCKET_BAND_TOP + i * ROW_H + ROW_H / 2;
@@ -1687,7 +1690,8 @@ window.__ModuleLoader__.load({
       const cutHits = useRef(new Set());
       const [pending, setPending] = useState(null);
       const [status, setStatus] = useState('');
-      const [models, setModels] = useState([]);
+      const [models, setModels] = useState(() => cachedModels);
+      const [modelsLoading, setModelsLoading] = useState(() => cachedModels.length === 0);
       const [openModelFor, setOpenModelFor] = useState(null);
       const [enabled, setEnabled] = useState(() => Boolean(initial && initial.enabled));
 
@@ -1782,7 +1786,10 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         let alive = true;
         const remote = hostCtx && hostCtx.remote && hostCtx.remote.session;
-        if (!remote || typeof remote.modelCatalog !== 'function') return undefined;
+        if (!remote || typeof remote.modelCatalog !== 'function') {
+          setModelsLoading(false);
+          return undefined;
+        }
         remote.modelCatalog().then((res) => {
           if (!alive || !res || !res.ok) return;
           const flat = [];
@@ -1798,8 +1805,11 @@ window.__ModuleLoader__.load({
               });
             }
           }
+          cachedModels = flat;
           setModels(flat);
-        }).catch(() => {});
+        }).catch(() => {}).finally(() => {
+          if (alive) setModelsLoading(false);
+        });
         return () => { alive = false; };
       }, []);
 
@@ -3404,6 +3414,17 @@ window.__ModuleLoader__.load({
 
       const modelControl = (node) => {
         if (!models.length) {
+          if (modelsLoading) {
+            return h('button', {
+              type: 'button',
+              disabled: true,
+              style: { ...S.selectBtn, color: C.dim, cursor: 'default' },
+              onMouseDown: (e) => e.stopPropagation(),
+            },
+              h('span', { style: S.selectText }, node.model || t('loadingModels')),
+              h('span', { style: S.caret }, '▾'),
+            );
+          }
           return h('input', {
             style: S.input,
             value: node.model || '',

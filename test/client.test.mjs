@@ -376,3 +376,11 @@ test('entryRunButtonState covers ready, disabled (off/empty), running, and waiti
   assert.equal(waiting.disabled, true);
   assert.ok(waiting.title.includes('中审'));
 });
+
+test('popup surfaces do not hardcode dark hex fallbacks and explicitly inherit theme foreground color', () => {
+  const src = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(src, /#2a2b2f/i, 'C.elevated must not hardcode a dark hex fallback that breaks light themes');
+  assert.match(src, /elevated:\s*'var\(--dsw-alias-bg-elevated,\s*var\(--dsw-alias-bg-popover,/, 'C.elevated chains through host surface tokens');
+  assert.match(src, /menu:\s*\{[^}]*background:\s*C\.elevated,\s*color:\s*C\.text/s, 'dropdown menu sets explicit foreground color');
+  assert.match(src, /menuRow:\s*\{[^}]*color:\s*C\.text/s, 'dropdown menu rows set explicit foreground color');
+});
