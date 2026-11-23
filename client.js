@@ -37,11 +37,12 @@ window.__ModuleLoader__.load({
       duplicate: 'Shift+D',
       delete: 'Delete',
       undo: 'Ctrl+Z',
+      redo: 'Ctrl+Shift+Z',
       fitView: '',
       autoLayout: '',
       toggleDir: '',
     };
-    const SHORTCUT_ORDER = ['addNode', 'duplicate', 'delete', 'undo', 'fitView', 'autoLayout', 'toggleDir'];
+    const SHORTCUT_ORDER = ['addNode', 'duplicate', 'delete', 'undo', 'redo', 'fitView', 'autoLayout', 'toggleDir'];
 
     const NODE_W = 216;
     const NODE_H = 234;
@@ -114,7 +115,7 @@ window.__ModuleLoader__.load({
     const LANG_KEY = STORAGE_PREFIX + 'lang';
     const I18N = {
       zh: {
-        addAgent: '+ 子代理', addLead: '+ Lead', addCond: '+ 条件', undo: '↶ 撤销', sync: '↥ 同步',
+        addAgent: '+ 子代理', addLead: '+ Lead', addCond: '+ 条件', undo: '↶ 撤销', redo: '↷ 重做', sync: '↥ 同步',
         enabled: '● 已启用', disabled: '○ 已禁用', presetName: '预设名', save: '☆ 保存',
         presets: '☰ 预设', unsaved: '有未同步改动', synced: '已同步',
         pickModel: '选择模型', loadingModels: '加载中…', defaultEffort: '默认',
@@ -165,7 +166,7 @@ window.__ModuleLoader__.load({
         loadedPreset: '已载入预设', invalidPreset: '预设内容无效', deletedPreset: '已删除预设',
         syncFailed: '同步失败', upToDate: '已是最新', syncedToHost: '已同步到 Host',
         syncedWithStdWarn: '已同步（含可写/命令节点，请确认主对话权限已放开）',
-        cannotOpen: '无法打开会话', undoDone: '已撤销', undoNone: '没有可撤销的操作',
+        cannotOpen: '无法打开会话', undoDone: '已撤销', undoNone: '没有可撤销的操作', redoDone: '已重做', redoNone: '没有可重做的操作',
         leadLocked: '入口 Lead 不能删除', modelsMissing: '模型列表未加载',
         tipLead: 'Lead 步骤在对话里执行，画布不追踪其状态',
         tipOrphan: '未连线：运行时会被跳过', tipStatus: '子代理节点的运行状态',
@@ -267,6 +268,7 @@ window.__ModuleLoader__.load({
         scDuplicate: '复制选中节点与连线',
         scDelete: '删除选中节点',
         scUndo: '撤销',
+        scRedo: '重做',
         scFitView: '全览居中',
         scAutoLayout: '自动排版',
         scToggleDir: '切换横排 / 竖排',
@@ -285,7 +287,7 @@ window.__ModuleLoader__.load({
         importNone: '剪贴板里没有可识别的画布数据',
         importBad: '画布数据格式不对',
         tipSync: '把当前画布同步给 Host（会在对话里留一条同步记录）',
-        tipUndo: '撤销上一步结构改动', tipSave: '把当前画布保存为预设（可在新会话载入）',
+        tipUndo: '撤销上一步结构改动', tipRedo: '重做上一步撤销的改动（Ctrl+Shift+Z / Ctrl+Y）', tipSave: '把当前画布保存为预设（可在新会话载入）',
         tipPresets: '保存当前画布、跨会话复用，或载入内置模板', tipModel: '推理等级（默认 = 该模型声明的 defaultEffort）',
         tipMemory: '记忆：复用这个节点上一次的会话（跨运行及重启后可恢复）',
         memLatest: '最新',
@@ -299,7 +301,7 @@ window.__ModuleLoader__.load({
         lang: 'ZH',
       },
       en: {
-        addAgent: '+ Subagent', addLead: '+ Lead', addCond: '+ Condition', undo: '↶ Undo', sync: '↥ Sync',
+        addAgent: '+ Subagent', addLead: '+ Lead', addCond: '+ Condition', undo: '↶ Undo', redo: '↷ Redo', sync: '↥ Sync',
         enabled: '● ON', disabled: '○ OFF', presetName: 'Preset name', save: '☆ Save',
         presets: '☰ Presets', unsaved: 'Unsaved changes', synced: 'Synced',
         pickModel: 'Pick a model', loadingModels: 'Loading…', defaultEffort: 'default',
@@ -350,7 +352,7 @@ window.__ModuleLoader__.load({
         loadedPreset: 'Loaded preset', invalidPreset: 'Preset content is invalid', deletedPreset: 'Deleted preset',
         syncFailed: 'Sync failed', upToDate: 'Already up to date', syncedToHost: 'Synced to host',
         syncedWithStdWarn: 'Synced (has write/tool nodes — check main chat permission mode)',
-        cannotOpen: 'Cannot open the session', undoDone: 'Undone', undoNone: 'Nothing to undo',
+        cannotOpen: 'Cannot open the session', undoDone: 'Undone', undoNone: 'Nothing to undo', redoDone: 'Redone', redoNone: 'Nothing to redo',
         leadLocked: 'The entry Lead cannot be deleted', modelsMissing: 'Model list is not loaded',
         tipLead: 'Lead steps run in the chat; the canvas does not track them',
         tipOrphan: 'Unlinked: skipped when the canvas runs', tipStatus: 'Subagent run status',
@@ -452,6 +454,7 @@ window.__ModuleLoader__.load({
         scDuplicate: 'Duplicate nodes & links',
         scDelete: 'Delete selected nodes',
         scUndo: 'Undo',
+        scRedo: 'Redo',
         scFitView: 'Fit all in view',
         scAutoLayout: 'Auto layout',
         scToggleDir: 'Toggle Horiz / Vert layout',
@@ -470,7 +473,7 @@ window.__ModuleLoader__.load({
         importNone: 'No canvas data found in the clipboard',
         importBad: 'Canvas data is malformed',
         tipSync: 'Publish this canvas to the host (leaves one sync record in the chat)',
-        tipUndo: 'Undo the last structural change', tipSave: 'Save this canvas as a preset (reusable in new chats)',
+        tipUndo: 'Undo the last structural change', tipRedo: 'Redo the last undone change (Ctrl+Shift+Z / Ctrl+Y)', tipSave: 'Save this canvas as a preset (reusable in new chats)',
         tipPresets: 'Save this canvas for new chats, or load a preset / starter template', tipModel: 'Reasoning effort (default = the model\'s defaultEffort)',
         tipMemory: 'Memory: reuse this node\'s previous session (persisted across runs and restarts)',
         memLatest: 'Latest',
@@ -987,6 +990,16 @@ window.__ModuleLoader__.load({
         clonedEdges.push(nextEdge);
       }
       return { clones, clonedEdges };
+    }
+
+    /** Compute the next node selection when clicking `id` (Shift/Ctrl toggles membership). */
+    function nextSelectionOnNodeClick(selectedIds, id, additive) {
+      const cur = Array.isArray(selectedIds) ? selectedIds : [];
+      if (additive) {
+        if (cur.includes(id)) return { next: cur.filter((x) => x !== id), toggledOff: true };
+        return { next: cur.concat([id]), toggledOff: false };
+      }
+      return { next: cur.includes(id) ? cur : [id], toggledOff: false };
     }
 
     function socketCenterY(i) {
@@ -2098,6 +2111,7 @@ window.__ModuleLoader__.load({
       const syncTimer = useRef(null);
       const lastSync = useRef('');
       const historyRef = useRef([]);
+      const redoRef = useRef([]);
       const [dirty, setDirty] = useState(() => Boolean(initial && initial.enabled));
       const [view, setView] = useState({ k: 1, x: 0, y: 0 });
       const viewRef = useRef(view);
@@ -2630,19 +2644,33 @@ window.__ModuleLoader__.load({
         };
       }, []);
 
-      // Snapshot before every structural change so a mis-click can be undone.
+      // Snapshot before every structural change so a mis-click can be undone/redone.
       const pushSnapshot = () => {
-        historyRef.current.push({ nodes, edges });
+        historyRef.current.push({ nodes: nodesRef.current, edges: edgesRef.current });
         if (historyRef.current.length > 50) historyRef.current.shift();
+        redoRef.current = [];
       };
 
       const undo = () => {
         const prev = historyRef.current.pop();
         if (!prev) { flash(t('undoNone')); return; }
+        redoRef.current.push({ nodes: nodesRef.current, edges: edgesRef.current });
+        if (redoRef.current.length > 50) redoRef.current.shift();
         setNodes(prev.nodes);
         setEdges(prev.edges);
         setSelectedIds([]);
         flash(t('undoDone'));
+      };
+
+      const redo = () => {
+        const next = redoRef.current.pop();
+        if (!next) { flash(t('redoNone')); return; }
+        historyRef.current.push({ nodes: nodesRef.current, edges: edgesRef.current });
+        if (historyRef.current.length > 50) historyRef.current.shift();
+        setNodes(next.nodes);
+        setEdges(next.edges);
+        setSelectedIds([]);
+        flash(t('redoDone'));
       };
 
       const openRun = (node, run) => {
@@ -2952,19 +2980,21 @@ window.__ModuleLoader__.load({
         const node = nodes.find((n) => n.id === id);
         if (!node) return;
         const p = pointTo(e);
-        const group = selectedIds.includes(id) ? selectedIds : [id];
-        if (!selectedIds.includes(id)) setSelectedIds([id]);
+        const additive = Boolean(e.shiftKey || e.ctrlKey || e.metaKey);
+        const { next: group, toggledOff } = nextSelectionOnNodeClick(selectedIds, id, additive);
+        setSelectedIds(group);
+        setOpenModelFor(null);
+        setAddMenu(null);
+        setCtxMenu(null);
+        e.preventDefault();
+        e.stopPropagation();
+        if (toggledOff) return;
         const origins = group
           .map((nid) => nodes.find((n) => n.id === nid))
           .filter(Boolean)
           .map((n) => ({ id: n.id, x: n.x, y: n.y }));
         nodeDrag.current = { origins, startX: p.x, startY: p.y, moved: false };
         setDragging(true);
-        setOpenModelFor(null);
-        setAddMenu(null);
-        setCtxMenu(null);
-        e.preventDefault();
-        e.stopPropagation();
       };
 
       const onNodeContextMenu = (e, node) => {
@@ -3203,7 +3233,7 @@ window.__ModuleLoader__.load({
       // Configurable canvas keyboard shortcuts (defaults: Shift+A, Shift+D, Delete, Ctrl+Z, Esc).
       const keyActionsRef = useRef(null);
       keyActionsRef.current = {
-        undo, deleteSelected, duplicateSelected, openAddMenuAtCursor, addNode, fitView, autoLayout, toggleDirection, flash, t,
+        undo, redo, deleteSelected, duplicateSelected, openAddMenuAtCursor, addNode, fitView, autoLayout, toggleDirection, flash, t,
         addMenu, ctxMenu, roleEditFor, openModelFor, menuOpen, presetOpen, helpOpen, shortcutsOpen, recordingAction, decisionViewFor, refsEditFor,
         setAddMenu, setCtxMenu, setRoleEditFor, setOpenModelFor, setMenuOpen, setPresetOpen, setHelpOpen, setShortcutsOpen, setRecordingAction, setShortcuts, setDecisionViewFor, setRefsEditFor,
       };
@@ -3279,9 +3309,16 @@ window.__ModuleLoader__.load({
             act.openAddMenuAtCursor();
             return;
           }
+          const allBound = Object.values(sc).map(normalizeShortcut);
           if (matchesShortcut(ev, sc.undo)) {
             ev.preventDefault();
             act.undo();
+            return;
+          }
+          if (matchesShortcut(ev, sc.redo)
+            || (normalizeShortcut(sc.redo) === 'Ctrl+Shift+Z' && !allBound.includes('Ctrl+Y') && matchesShortcut(ev, 'Ctrl+Y'))) {
+            ev.preventDefault();
+            act.redo();
             return;
           }
           if (matchesShortcut(ev, sc.duplicate)) {
@@ -3304,7 +3341,6 @@ window.__ModuleLoader__.load({
             act.toggleDirection();
             return;
           }
-          const allBound = Object.values(sc).map(normalizeShortcut);
           const delHit = matchesShortcut(ev, sc.delete)
             || (normalizeShortcut(sc.delete) === 'Delete' && !allBound.includes('Backspace') && matchesShortcut(ev, 'Backspace'));
           if (delHit) {
@@ -3459,7 +3495,7 @@ window.__ModuleLoader__.load({
                 const pos = clampMenuPos(cx, cy, wrapRect.width, wrapRect.height, 180, 120);
                 setCtxMenu({ kind: 'edge', edgeId: hitEdge.id, sx: pos.sx, sy: pos.sy, wx: rc.start.x, wy: rc.start.y });
               } else {
-                const pos = clampMenuPos(cx, cy, wrapRect.width, wrapRect.height, 186, 296);
+                const pos = clampMenuPos(cx, cy, wrapRect.width, wrapRect.height, 186, 322);
                 setCtxMenu({ kind: 'canvas', sx: pos.sx, sy: pos.sy, wx: rc.start.x, wy: rc.start.y });
               }
             }
@@ -4643,6 +4679,13 @@ window.__ModuleLoader__.load({
                 }, t('undo')),
                 h('div', {
                   style: S.moreRow,
+                  title: t('tipRedo'),
+                  onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+                  onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+                  onClick: () => { setMenuOpen(false); redo(); },
+                }, t('redo')),
+                h('div', {
+                  style: S.moreRow,
                   title: t('tipLocate'),
                   onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
                   onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
@@ -4761,6 +4804,7 @@ window.__ModuleLoader__.load({
             duplicate: t('scDuplicate'),
             delete: t('scDelete'),
             undo: t('scUndo'),
+            redo: t('scRedo'),
             fitView: t('scFitView'),
             autoLayout: t('scAutoLayout'),
             toggleDir: t('scToggleDir'),
@@ -4961,6 +5005,7 @@ window.__ModuleLoader__.load({
               menuRow('add-cond', t('addCond'), () => addNode('condition', { x: ctxMenu.wx, y: ctxMenu.wy })),
               h('div', { style: S.ctxDivider }),
               menuRow('undo', t('undo'), () => { setCtxMenu(null); undo(); }, { hint: shortcuts.undo || '' }),
+              menuRow('redo', t('redo'), () => { setCtxMenu(null); redo(); }, { hint: shortcuts.redo || '' }),
               menuRow('layout', t('autoLayoutBtn'), () => { setCtxMenu(null); autoLayout(); }, { hint: shortcuts.autoLayout || '' }),
               menuRow('dir', direction === 'tb' ? t('dirLR') : t('dirTB'), () => { setCtxMenu(null); toggleDirection(); }, { hint: shortcuts.toggleDir || '' }),
               menuRow('fit', t('locate'), () => { setCtxMenu(null); fitView(); }, { hint: shortcuts.fitView || '' }),
@@ -5517,7 +5562,7 @@ window.__ModuleLoader__.load({
           try { console.error('[workflow-canvas] apply failed', error); } catch (_e) { /* ignore */ }
         }
       },
-      __test: { topoOrder, wouldCycle, soloLeadNodeIds, layoutGraph, builtinTemplates, deadEndNodeIds, nextEffectLevel, nextMaxParallel, dropdownAlign, zoomAroundPoint, scrubZoom, buildPlan, loadDoc, saveDoc, storageKey, socketCenterY, nodeHeight, conditionBranchesForUI, distanceToEdge, edgeCurve, compatibleTargetsForWire, conditionVerdictSummary, entryRunButtonState, outputSocketX, inputSocketPos, outputSocketPos, normalizeRefsUI, clampMenuPos, cloneSelection, DEFAULT_SHORTCUTS, normalizeShortcut, formatShortcutFromEvent, matchesShortcut, applyShortcutBinding },
+      __test: { topoOrder, wouldCycle, soloLeadNodeIds, layoutGraph, builtinTemplates, deadEndNodeIds, nextEffectLevel, nextMaxParallel, dropdownAlign, zoomAroundPoint, scrubZoom, buildPlan, loadDoc, saveDoc, storageKey, socketCenterY, nodeHeight, conditionBranchesForUI, distanceToEdge, edgeCurve, compatibleTargetsForWire, conditionVerdictSummary, entryRunButtonState, outputSocketX, inputSocketPos, outputSocketPos, normalizeRefsUI, clampMenuPos, cloneSelection, nextSelectionOnNodeClick, DEFAULT_SHORTCUTS, normalizeShortcut, formatShortcutFromEvent, matchesShortcut, applyShortcutBinding },
     };
   },
 });

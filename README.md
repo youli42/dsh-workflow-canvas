@@ -126,10 +126,10 @@ Active nodes glow blue with animated flow wires and turn green when done. **Clic
 | Middle-drag / `Space` + left-drag | Pan the canvas |
 | Wheel / bottom-right `⊡` & `100%` pill | Zoom around cursor / fit all nodes / click to reset 100%, drag left-right to scrub zoom |
 | `⇄ Horiz` / `⇅ Vert` | Switch canvas direction and auto-layout (vertical mode uses top-in / bottom-out vertical curves for narrow sidebars; Condition nodes support `Out R / Out L` side toggle) |
-| Marquee drag + `Shift+D` / `Delete` | Multi-select move, duplicate (with settings & internal links), or batch delete |
-| Right-click node / edge / canvas | Context menu (edit role, manage refs, insert node on wire, add nodes, layout, undo) |
+| Marquee / `Shift`/`Ctrl` click + `Shift+D` / `Delete` | Multi-select move, duplicate (with settings & internal links), or batch delete |
+| Right-click node / edge / canvas | Context menu (edit role, manage refs, insert node on wire, add nodes, layout, undo/redo) |
 | Right-drag across wires | Cut links (activates at ≥ 6px drag without conflicting with context menu; toggle under `⋯`) |
-| `Ctrl+Z` / `Esc` | Undo structural edit / close popups |
+| `Ctrl+Z` / `Ctrl+Shift+Z` (`Ctrl+Y`) / `Esc` | Undo / redo structural edit / close popups |
 | `⋯` menu | Undo, Fit, Import / Copy JSON, Auto layout, Clear canvas, Visual effects, Max parallel, Language, Shortcuts |
 
 ## Presets, sharing & limits

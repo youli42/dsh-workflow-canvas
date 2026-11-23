@@ -488,6 +488,7 @@ test('configurable shortcuts default duplicate to Shift+D, match KeyboardEvents,
   assert.equal(client.DEFAULT_SHORTCUTS.duplicate, 'Shift+D');
   assert.equal(client.DEFAULT_SHORTCUTS.addNode, 'Shift+A');
   assert.equal(client.DEFAULT_SHORTCUTS.undo, 'Ctrl+Z');
+  assert.equal(client.DEFAULT_SHORTCUTS.redo, 'Ctrl+Shift+Z');
   assert.equal(client.DEFAULT_SHORTCUTS.delete, 'Delete');
 
   assert.equal(client.normalizeShortcut('shift+d'), 'Shift+D');
@@ -506,4 +507,22 @@ test('configurable shortcuts default duplicate to Shift+D, match KeyboardEvents,
   assert.equal(clearedConflict, true);
   assert.equal(next.fitView, 'Shift+D');
   assert.equal(next.duplicate, '');
+});
+
+test('nextSelectionOnNodeClick supports Shift/Ctrl additive toggle and normal single-click', () => {
+  const s1 = client.nextSelectionOnNodeClick(['a'], 'b', true);
+  assert.deepEqual([...s1.next], ['a', 'b']);
+  assert.equal(s1.toggledOff, false);
+
+  const s2 = client.nextSelectionOnNodeClick(['a', 'b'], 'a', true);
+  assert.deepEqual([...s2.next], ['b']);
+  assert.equal(s2.toggledOff, true);
+
+  const s3 = client.nextSelectionOnNodeClick(['a', 'b'], 'a', false);
+  assert.deepEqual([...s3.next], ['a', 'b'], 'plain click on already-selected node preserves group for drag');
+  assert.equal(s3.toggledOff, false);
+
+  const s4 = client.nextSelectionOnNodeClick(['a', 'b'], 'c', false);
+  assert.deepEqual([...s4.next], ['c']);
+  assert.equal(s4.toggledOff, false);
 });
