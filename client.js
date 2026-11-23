@@ -31,6 +31,17 @@ window.__ModuleLoader__.load({
     const KIND = 'workflow';
     const STORAGE_PREFIX = 'dsh-workflow-canvas:v1:';
     const PRESET_KEY = STORAGE_PREFIX + 'presets';
+    const SHORTCUTS_KEY = STORAGE_PREFIX + 'shortcuts';
+    const DEFAULT_SHORTCUTS = {
+      addNode: 'Shift+A',
+      duplicate: 'Shift+D',
+      delete: 'Delete',
+      undo: 'Ctrl+Z',
+      fitView: '',
+      autoLayout: '',
+      toggleDir: '',
+    };
+    const SHORTCUT_ORDER = ['addNode', 'duplicate', 'delete', 'undo', 'fitView', 'autoLayout', 'toggleDir'];
 
     const NODE_W = 216;
     const NODE_H = 234;
@@ -181,12 +192,12 @@ window.__ModuleLoader__.load({
           '6. 连好后点「● 已启用」，然后对对话说「跑一次」，由我调用执行。',
           '7. 遇到 Lead 节点会暂停，我做完再把结果交回去继续。',
           '8. 没连线的节点显示为虚线，运行时会被跳过。',
-          '9. 右键按住划过一条连线可以切断；可在「⋯」里关掉这个手势。',
+          '9. 右键单击节点 / 连线 / 空白处可弹出快捷菜单（含线上插点、复制删除、新建节点等）；按住右键划过连线可切断（可在「⋯」开关）。',
           '10. 点右上角「☰ 预设」顶部即可保存当前画布，开新对话时一键载入跨会话复用。',
           '11. 你可以直接让我改画布：说「把那三个节点的分工改成…」，我会就地修改，不动你摆的位置。',
           '12. session 线连到 Lead 时，我会在暂停那步拿到那个子代理的会话，可以继续追问它。',
           '13. 按住鼠标中键（或空格 + 左键）拖动画布平移；点击子代理节点左下角状态可直达它的对话记录。',
-          '14. 快捷键：Shift+A 在光标处新建节点，Ctrl+D 复制选中节点，Delete 批量删除，Ctrl+Z 撤销，Esc 关闭弹窗。',
+          '14. 快捷键：默认 Shift+A 新建节点，Shift+D 复制节点与连线，Delete 删除，Ctrl+Z 撤销，Esc 关闭弹窗（可在「⋯ → 快捷键设置」自定义）。',
         ].join('\n'),
         openChat: '会话',
         tipOpenRun: '点击打开该子代理的对话记录',
@@ -224,6 +235,41 @@ window.__ModuleLoader__.load({
         condSideR: '右出',
         condSideL: '左出',
         tipCondSide: '竖排模式下切换分支输出口在左侧或右侧',
+        refsBtn: '参考',
+        refsTitleGlobal: '全局参考 / 约束（注入所有节点）',
+        refsTitleNode: '节点参考 / 约束',
+        refsAdd: '+ 添加参考',
+        refsPh: '文件路径、URL 或约束条款，如 src/auth.js',
+        refsEmpty: '点击下方按钮添加参考文件、路径或规范约束（最多 16 条）',
+        tipRefs: '附加参考文件、目录或约束清单，运行时自动注入提示词',
+        delRefTip: '删除该参考项',
+        ctxNodeTitle: '节点操作',
+        ctxEdgeTitle: '连线操作',
+        ctxCanvasTitle: '画布操作',
+        ctxDup: '复制节点',
+        ctxDelNode: '删除节点',
+        ctxOpenChat: '打开子代理对话 ↗',
+        ctxEditText: '展开编辑文本',
+        ctxManageRefs: '管理参考清单',
+        ctxDelEdge: '删除连线',
+        ctxInsertAgent: '在此插入子代理',
+        ctxInsertCond: '在此插入条件节点',
+        ctxLangToggle: '界面语言',
+        shortcutsMenu: '⌨ 快捷键设置',
+        shortcutsTitle: '快捷键设置',
+        shortcutsHint: '点击右侧按键框后按下新组合键；按 Esc 取消录制，点 × 清除绑定。',
+        shortcutsReset: '恢复默认',
+        shortcutsPress: '请按键…',
+        shortcutsUnset: '未设置',
+        shortcutsResetOk: '快捷键已恢复默认',
+        shortcutsConflict: '已更新快捷键（原冲突项已清空）',
+        scAddNode: '新建节点（光标处）',
+        scDuplicate: '复制选中节点与连线',
+        scDelete: '删除选中节点',
+        scUndo: '撤销',
+        scFitView: '全览居中',
+        scAutoLayout: '自动排版',
+        scToggleDir: '切换横排 / 竖排',
         fxLabel: '视觉效果',
         fxMinimal: '极简',
         fxStandard: '标准',
@@ -233,8 +279,8 @@ window.__ModuleLoader__.load({
         tipLeadReady: '上游节点已全部完成，正等待在对话里拍板继续',
         stDeadEnd: '无出边',
         tipDeadEnd: '该子代理没有下游连线，运行时不生效；请连入下游节点或终审 Lead',
-        stSoloLead: '未接子代理',
-        tipSoloLead: '该 Lead 仅串联了其他 Lead，未连入任何子代理，运行时不生效',
+        stSoloLead: '待填分工',
+        tipSoloLead: '该 Lead 阶段未连入子代理且分工为空，填写分工后即可作为主对话阶段运行',
         singleModelHint: '当前仅 1 个可用模型，暂无其它备用路由',
         importNone: '剪贴板里没有可识别的画布数据',
         importBad: '画布数据格式不对',
@@ -331,12 +377,12 @@ window.__ModuleLoader__.load({
           '6. Press ● ON, then ask in chat to run the canvas.',
           '7. The run pauses at every Lead node so the conversation can do that step.',
           '8. Unlinked nodes are dashed and skipped at run time.',
-          '9. Hold the right button and sweep across a link to cut it; turn the gesture off under ⋯.',
+          '9. Right-click a node, wire, or blank canvas for context actions (insert on wire, duplicate/delete, add nodes); right-drag across a wire to cut it (toggle under ⋯).',
           '10. Open ☰ Presets to save the current canvas at the top and load it in any new chat.',
           '11. You can ask me to edit the canvas; I patch it in place and keep your layout.',
           '12. A session link into a Lead step hands me that child agent, so I can follow up with it.',
           '13. Hold the middle mouse button (or Space + drag) to pan; click a subagent status badge at the bottom-left to open its chat.',
-          '14. Shortcuts: Shift+A adds a node at cursor, Ctrl+D duplicates, Delete removes selected, Ctrl+Z undoes, Esc closes popups.',
+          '14. Shortcuts: Shift+A adds a node at cursor, Shift+D duplicates nodes & links, Delete removes selected, Ctrl+Z undoes, Esc closes popups (customizable under ⋯ → Shortcuts).',
         ].join('\n'),
         openChat: 'Chat',
         tipOpenRun: 'Click to open this subagent conversation',
@@ -374,6 +420,41 @@ window.__ModuleLoader__.load({
         condSideR: 'Out R',
         condSideL: 'Out L',
         tipCondSide: 'Flip condition branch sockets between left and right edges in vertical mode',
+        refsBtn: 'Refs',
+        refsTitleGlobal: 'Global references / rules (all nodes)',
+        refsTitleNode: 'Node references / rules',
+        refsAdd: '+ Add ref',
+        refsPh: 'File path, URL, or rule, e.g. src/auth.js',
+        refsEmpty: 'Add reference files, paths, or rules injected into prompts (up to 16)',
+        tipRefs: 'Attach reference files, paths, or constraints injected at run time',
+        delRefTip: 'Remove this reference',
+        ctxNodeTitle: 'Node',
+        ctxEdgeTitle: 'Link',
+        ctxCanvasTitle: 'Canvas',
+        ctxDup: 'Duplicate',
+        ctxDelNode: 'Delete',
+        ctxOpenChat: 'Open chat ↗',
+        ctxEditText: 'Expand editor',
+        ctxManageRefs: 'Manage refs',
+        ctxDelEdge: 'Delete link',
+        ctxInsertAgent: 'Insert Subagent here',
+        ctxInsertCond: 'Insert Condition here',
+        ctxLangToggle: 'Language',
+        shortcutsMenu: '⌨ Shortcuts',
+        shortcutsTitle: 'Keyboard Shortcuts',
+        shortcutsHint: 'Click a key button then press a new combo. Press Esc to cancel, or × to clear.',
+        shortcutsReset: 'Reset defaults',
+        shortcutsPress: 'Press keys…',
+        shortcutsUnset: 'Unbound',
+        shortcutsResetOk: 'Shortcuts reset to defaults',
+        shortcutsConflict: 'Shortcut updated (cleared conflict)',
+        scAddNode: 'Add node at cursor',
+        scDuplicate: 'Duplicate nodes & links',
+        scDelete: 'Delete selected nodes',
+        scUndo: 'Undo',
+        scFitView: 'Fit all in view',
+        scAutoLayout: 'Auto layout',
+        scToggleDir: 'Toggle Horiz / Vert layout',
         fxLabel: 'Visual effects',
         fxMinimal: 'Minimal',
         fxStandard: 'Standard',
@@ -383,8 +464,8 @@ window.__ModuleLoader__.load({
         tipLeadReady: 'Upstream steps are done; waiting for Lead in chat',
         stDeadEnd: 'No out-link',
         tipDeadEnd: 'This subagent has no outgoing link and is skipped at run time; wire it into a downstream node or Lead',
-        stSoloLead: 'Needs agent',
-        tipSoloLead: 'This Lead only chains from another Lead with no subagent upstream, so it is skipped at run time',
+        stSoloLead: 'Needs role',
+        tipSoloLead: 'This chained Lead stage has no subagent upstream and an empty role; fill in a role to make it active',
         singleModelHint: 'Only 1 model available — no alternate fallback route',
         importNone: 'No canvas data found in the clipboard',
         importBad: 'Canvas data is malformed',
@@ -438,16 +519,16 @@ window.__ModuleLoader__.load({
         background: C.base, color: C.text, fontSize: '13px',
       },
       toolbar: {
-        display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '6px',
-        padding: '8px 10px', borderBottom: '1px solid ' + C.border, flex: '0 0 auto',
+        display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '5px',
+        padding: '6px 8px', borderBottom: '1px solid ' + C.border, flex: '0 0 auto',
       },
       btn: {
-        padding: '5px 10px', borderRadius: '6px', border: '1px solid ' + C.border,
-        background: C.raised, color: C.text, fontSize: '12px', cursor: 'pointer', whiteSpace: 'nowrap',
+        padding: '4px 8px', borderRadius: '6px', border: '1px solid ' + C.border,
+        background: C.raised, color: C.text, fontSize: '11px', cursor: 'pointer', whiteSpace: 'nowrap',
       },
       btnDirty: {
-        padding: '5px 10px', borderRadius: '6px', border: '1px solid ' + C.accent,
-        background: C.raised, color: C.accent, fontSize: '12px', fontWeight: 600,
+        padding: '4px 8px', borderRadius: '6px', border: '1px solid ' + C.accent,
+        background: C.raised, color: C.accent, fontSize: '11px', fontWeight: 600,
         cursor: 'pointer', whiteSpace: 'nowrap',
       },
       toolSep: {
@@ -479,6 +560,21 @@ window.__ModuleLoader__.load({
         padding: '5px 10px', borderRadius: '999px', border: '1px solid ' + C.border,
         background: C.elevated, color: C.dim, fontSize: '11px', fontWeight: 600,
         cursor: 'pointer', boxShadow: '0 4px 14px rgba(0,0,0,0.35)',
+      },
+      floatZoomBar: {
+        position: 'absolute', right: '10px', bottom: '10px', zIndex: 30,
+        display: 'inline-flex', alignItems: 'center', gap: '4px',
+        padding: '3px 5px', borderRadius: '999px',
+        background: C.elevated, border: '1px solid ' + C.border,
+        boxShadow: '0 4px 14px rgba(0,0,0,0.28)',
+      },
+      floatZoomBtn: {
+        padding: '2px 6px', borderRadius: '999px', border: 'none',
+        background: 'transparent', color: C.text, fontSize: '11px',
+        cursor: 'pointer', whiteSpace: 'nowrap', lineHeight: '16px',
+      },
+      ctxDivider: {
+        height: '1px', background: C.border, opacity: 0.65, margin: '3px 4px',
       },
       canvasWrap: {
         position: 'relative', flex: '1 1 auto', minHeight: '0',
@@ -527,6 +623,19 @@ window.__ModuleLoader__.load({
       helpTitle: { flex: '1 1 auto', fontSize: '13px', fontWeight: 600, color: C.text },
       helpBody: { fontSize: '11px', lineHeight: '17px', color: C.dim },
       helpLine: { whiteSpace: 'pre-wrap' },
+      shortcutRow: {
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px',
+        padding: '6px 2px', borderBottom: '1px solid ' + C.border, fontSize: '11px', color: C.text,
+      },
+      shortcutKeyBtn: {
+        minWidth: '88px', padding: '3px 8px', borderRadius: '5px',
+        border: '1px solid ' + C.border, background: C.base, color: C.text,
+        fontSize: '11px', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+        cursor: 'pointer', textAlign: 'center', outline: 'none', whiteSpace: 'nowrap',
+      },
+      shortcutKeyRec: {
+        borderColor: C.accent, background: C.hover, color: C.accent, fontWeight: 600,
+      },
       presetBar: {
         marginLeft: 'auto', display: 'flex', alignItems: 'center',
         gap: '6px', position: 'relative', flex: '0 0 auto',
@@ -583,13 +692,13 @@ window.__ModuleLoader__.load({
       },
 
       title: {
-        position: 'absolute', left: '10px', right: '10px', top: '8px', height: '18px',
+        position: 'absolute', left: '10px', right: '62px', top: '8px', height: '18px',
         fontWeight: 600, fontSize: '12px', lineHeight: '18px',
         border: 'none', background: 'transparent', color: C.text, padding: 0, margin: 0,
         outline: 'none', boxSizing: 'border-box', userSelect: 'text', zIndex: 2,
       },
       titleReadonly: {
-        position: 'absolute', left: '10px', right: '10px', top: '8px', height: '18px',
+        position: 'absolute', left: '10px', right: '62px', top: '8px', height: '18px',
         fontWeight: 600, fontSize: '12px', lineHeight: '18px',
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', zIndex: 2,
       },
@@ -763,8 +872,7 @@ window.__ModuleLoader__.load({
         position: 'absolute', top: (ROW_H - PORT) / 2, width: PORT, height: PORT,
         borderRadius: '50%', background: C.raised, border: '2px solid ' + C.border,
         boxSizing: 'border-box', cursor: 'crosshair', zIndex: 6,
-        /* a little extra grab area without changing the drawn dot */
-        padding: 0, margin: -3, boxShadow: '0 0 0 3px transparent',
+        padding: 0, margin: 0, boxShadow: '0 0 0 3px transparent',
       },
       nodeDelete: {
         position: 'absolute', right: '-8px', top: '-8px', width: '18px', height: '18px',
@@ -795,10 +903,91 @@ window.__ModuleLoader__.load({
         padding: '9px 10px', zIndex: 65, boxShadow: '0 14px 32px rgba(0,0,0,0.52)',
         color: C.text, fontSize: '11px', lineHeight: '1.5', userSelect: 'text',
       },
+      refsPopover: {
+        position: 'absolute', left: '100%', top: '0', marginLeft: '8px', width: '268px',
+        background: C.elevated, color: C.text, border: '1px solid ' + C.border, borderRadius: '8px',
+        padding: '8px 9px', zIndex: 72, boxShadow: '0 12px 28px rgba(0,0,0,0.34)',
+      },
+      refsRow: {
+        display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '5px',
+      },
+      refsInput: {
+        flex: '1 1 auto', minWidth: 0, height: '22px', boxSizing: 'border-box',
+        padding: '0 6px', borderRadius: '4px', border: '1px solid ' + C.border,
+        background: C.base, color: C.text, fontSize: '10px', outline: 'none', userSelect: 'text',
+      },
     };
 
     let hostCtx = null;
     let cachedModels = [];
+
+    function normalizeRefsUI(rawRefs) {
+      if (!Array.isArray(rawRefs) || !rawRefs.length) return [];
+      const out = [];
+      const seen = new Set();
+      for (const r of rawRefs) {
+        if (out.length >= 16) break;
+        const s = typeof r === 'string' ? r.trim() : '';
+        if (!s || seen.has(s)) continue;
+        seen.add(s);
+        out.push(s);
+      }
+      return out;
+    }
+
+    /**
+     * Clamp a floating context menu inside the canvas wrap, flipping left/up when near the
+     * right or bottom edge so menu items never clip off narrow sidebars.
+     */
+    function clampMenuPos(cx, cy, wrapW, wrapH, menuW, menuH) {
+      const pad = 8;
+      const sx = (cx + menuW > wrapW - pad)
+        ? Math.max(pad, cx - menuW)
+        : Math.max(pad, Math.min(wrapW - menuW - pad, cx));
+      const sy = (cy + menuH > wrapH - pad)
+        ? Math.max(pad, cy - menuH)
+        : Math.max(pad, Math.min(wrapH - menuH - pad, cy));
+      return { sx, sy };
+    }
+
+    /**
+     * Clone all selected non-entry nodes and every internal edge connecting two cloned nodes,
+     * preserving edge type and condition branch while isolating mutable array fields.
+     */
+    function cloneSelection(nodes, edges, selectedIds, stampOverride) {
+      const selSet = new Set((selectedIds || []).filter((id) => id !== 'lead'));
+      const sources = (nodes || []).filter((n) => n && selSet.has(n.id));
+      if (!sources.length) return { clones: [], clonedEdges: [] };
+      const stamp = stampOverride || Date.now().toString(36);
+      const idMap = new Map();
+      const clones = sources.map((src, idx) => {
+        const { runs: _runs, ...rest } = src;
+        const newId = 'n' + stamp + '_' + idx + Math.random().toString(36).slice(2, 4);
+        idMap.set(src.id, newId);
+        const clone = {
+          ...rest,
+          id: newId,
+          x: (src.x || 0) + 28,
+          y: (src.y || 0) + 28,
+        };
+        if (Array.isArray(src.refs)) clone.refs = src.refs.slice();
+        if (Array.isArray(src.branches)) clone.branches = src.branches.map((b) => ({ ...b }));
+        return clone;
+      });
+      const clonedEdges = [];
+      let edgeIdx = 0;
+      for (const e of edges || []) {
+        if (!e || !idMap.has(e.from) || !idMap.has(e.to)) continue;
+        const nextEdge = {
+          ...e,
+          id: 'e' + stamp + '_' + (edgeIdx++) + Math.random().toString(36).slice(2, 4),
+          from: idMap.get(e.from),
+          to: idMap.get(e.to),
+        };
+        clonedEdges.push(nextEdge);
+      }
+      return { clones, clonedEdges };
+    }
 
     function socketCenterY(i) {
       return SOCKET_BAND_TOP + i * ROW_H + ROW_H / 2;
@@ -806,15 +995,14 @@ window.__ModuleLoader__.load({
 
     /**
      * Determine which node kinds can legally receive a wire dragged out from `fromNode`.
-     * Mirrors the canvas invariant that Lead -> Lead direct links are forbidden.
+     * All non-entry targets (agent, lead, condition) are valid, including Lead -> Lead stage chains.
      */
-    function compatibleTargetsForWire(fromNode, _edgeType) {
-      const fromLead = Boolean(fromNode && fromNode.kind === 'lead');
+    function compatibleTargetsForWire(_fromNode, _edgeType) {
       return {
         agent: true,
-        lead: !fromLead,
+        lead: true,
         condition: true,
-        leadBlockedReason: fromLead ? 'leadToLeadBlocked' : '',
+        leadBlockedReason: '',
       };
     }
 
@@ -955,7 +1143,7 @@ window.__ModuleLoader__.load({
 
     function inputSocketPos(node, direction) {
       if (direction === 'tb') return { x: node.x + NODE_W / 2, y: node.y };
-      return { x: node.x, y: node.y + socketCenterY(0) };
+      return { x: node.x, y: node.y + socketCenterY(0, node) };
     }
 
     function outputSocketPos(fromNode, type, branch, direction) {
@@ -1059,7 +1247,7 @@ window.__ModuleLoader__.load({
       const x1 = from.x + WORLD_PAD + NODE_W;
       const y1 = from.y + WORLD_PAD + outputSocketY(from, type, branch);
       const x2 = to.x + WORLD_PAD;
-      const y2 = to.y + WORLD_PAD + socketCenterY(0);
+      const y2 = to.y + WORLD_PAD + socketCenterY(0, to);
       const dx = Math.max(40, Math.abs(x2 - x1) * 0.5);
       return { x1, y1, c1x: x1 + dx, c1y: y1, c2x: x2 - dx, c2y: y2, x2, y2 };
     }
@@ -1139,8 +1327,8 @@ window.__ModuleLoader__.load({
 
     /**
      * Reachable non-entry Lead nodes that have zero reachable subagent upstream
-     * (chained solely from another Lead). Rendered dashed and skipped at run time;
-     * connecting any subagent into them makes them active immediately.
+     * AND an empty `role` (blank placeholders). Filling a `role` turns them into
+     * active main-conversation stage gates (Lead -> Lead chaining).
      */
     function soloLeadNodeIds(nodes, edges) {
       const list = Array.isArray(nodes) ? nodes : [];
@@ -1155,7 +1343,8 @@ window.__ModuleLoader__.load({
           const src = byId.get(e.from);
           return Boolean(src && src.kind !== 'lead');
         });
-        if (!hasAgentUp) out.add(n.id);
+        const hasRole = Boolean(String(n.role || '').trim());
+        if (!hasAgentUp && !hasRole) out.add(n.id);
       }
       return out;
     }
@@ -1533,39 +1722,43 @@ window.__ModuleLoader__.load({
         ? Math.max(1, Math.min(8, Math.floor(Number(opts.maxParallel))))
         : 4;
 
-      return {
-        plan: {
-          task,
-          maxParallel,
-          skipped: skipped.map((n) => n.label || n.id),
-          nodes: active.map((n) => {
-            const out = {
-              id: n.id,
-              kind: n.kind === 'lead' ? 'lead' : (n.kind === 'condition' ? 'condition' : 'agent'),
-              label: n.label || n.id,
-              role: n.role || '',
-              provider: n.provider || '',
-              model: n.model || '',
-              reasoning: n.reasoning || '',
-              preset: n.kind === 'condition' ? 'minimal' : (n.preset === 'minimal' ? 'minimal' : 'standard'),
-              keepSession: n.kind === 'condition' ? false : Boolean(n.keepSession),
-              memoryChildId: n.kind === 'condition' ? '' : (n.memoryChildId || ''),
-              // A structured link is the only thing that decides this: no separate switch.
-              structured: planEdges.some((e) => e.from === n.id && e.type === 'structured'),
-              fallbackModel: n.fallbackModel || '',
-              fallbackProvider: n.fallbackProvider || '',
-            };
-            if (out.kind === 'condition' && isCustomBranches(n)) {
-              out.branches = conditionBranchesForUI(n).map((b) => ({ id: b.id, label: b.label }));
-            }
-            if (out.kind === 'condition' && n.multiMatch) {
-              out.multiMatch = true;
-            }
-            return out;
-          }),
-          edges: planEdges,
-        },
+      const entryRefs = normalizeRefsUI(entry.refs);
+      const planOut = {
+        task,
+        maxParallel,
+        skipped: skipped.map((n) => n.label || n.id),
+        nodes: active.map((n) => {
+          const kind = n.kind === 'lead' ? 'lead' : (n.kind === 'condition' ? 'condition' : 'agent');
+          const out = {
+            id: n.id,
+            kind,
+            label: n.label || n.id,
+            role: n.role || '',
+            provider: n.provider || '',
+            model: n.model || '',
+            reasoning: n.reasoning || '',
+            preset: kind === 'condition' ? 'minimal' : (n.preset === 'minimal' ? 'minimal' : 'standard'),
+            keepSession: kind === 'condition' ? false : Boolean(n.keepSession),
+            memoryChildId: kind === 'condition' ? '' : (n.memoryChildId || ''),
+            // A structured link is the only thing that decides this: no separate switch.
+            structured: planEdges.some((e) => e.from === n.id && e.type === 'structured'),
+            fallbackModel: n.fallbackModel || '',
+            fallbackProvider: n.fallbackProvider || '',
+          };
+          if (kind === 'condition' && isCustomBranches(n)) {
+            out.branches = conditionBranchesForUI(n).map((b) => ({ id: b.id, label: b.label }));
+          }
+          if (kind === 'condition' && n.multiMatch) {
+            out.multiMatch = true;
+          }
+          const nodeRefs = normalizeRefsUI(n.refs);
+          if (nodeRefs.length) out.refs = nodeRefs;
+          return out;
+        }),
+        edges: planEdges,
       };
+      if (entryRefs.length) planOut.refs = entryRefs;
+      return { plan: planOut };
     }
 
     function loadCutMode() {
@@ -1622,6 +1815,101 @@ window.__ModuleLoader__.load({
     function nextMaxParallel(cur) {
       const idx = PARALLEL_STEPS.indexOf(Number(cur));
       return PARALLEL_STEPS[(idx + 1) % PARALLEL_STEPS.length];
+    }
+
+    /** Canonicalize a shortcut string like "shift+d" or "cmd+z" -> "Shift+D" / "Ctrl+Z". */
+    function normalizeShortcut(raw) {
+      if (typeof raw !== 'string') return '';
+      const trimmed = raw.trim();
+      if (!trimmed) return '';
+      const parts = trimmed.split('+').map((p) => p.trim()).filter(Boolean);
+      let ctrl = false;
+      let alt = false;
+      let shift = false;
+      let key = '';
+      for (const p of parts) {
+        const low = p.toLowerCase();
+        if (low === 'ctrl' || low === 'control' || low === 'cmd' || low === 'meta' || low === 'mod') ctrl = true;
+        else if (low === 'alt' || low === 'option') alt = true;
+        else if (low === 'shift') shift = true;
+        else if (low === 'del' || low === 'delete') key = 'Delete';
+        else if (low === 'backspace') key = 'Backspace';
+        else if (low === 'space' || p === ' ') key = 'Space';
+        else if (low === 'enter' || low === 'return') key = 'Enter';
+        else if (low === 'tab') key = 'Tab';
+        else if (/^f\d{1,2}$/i.test(p)) key = p.toUpperCase();
+        else if (p.length === 1) key = p.toUpperCase();
+        else key = p.charAt(0).toUpperCase() + p.slice(1);
+      }
+      if (!key || key === 'Escape') return '';
+      return (ctrl ? 'Ctrl+' : '') + (alt ? 'Alt+' : '') + (shift ? 'Shift+' : '') + key;
+    }
+
+    /** Extract a canonical shortcut string from a KeyboardEvent, or null for bare modifiers / Esc. */
+    function formatShortcutFromEvent(ev) {
+      if (!ev) return null;
+      const rawKey = typeof ev.key === 'string' ? ev.key : '';
+      if (!rawKey || rawKey === 'Control' || rawKey === 'Shift' || rawKey === 'Alt' || rawKey === 'Meta' || rawKey === 'Escape') {
+        return null;
+      }
+      const code = typeof ev.code === 'string' ? ev.code : '';
+      let key = '';
+      if (/^Key[A-Z]$/.test(code)) key = code.slice(3);
+      else if (/^Digit[0-9]$/.test(code)) key = code.slice(5);
+      else if (rawKey === ' ') key = 'Space';
+      else if (rawKey === 'Delete' || rawKey === 'Backspace' || rawKey === 'Enter' || rawKey === 'Tab') key = rawKey;
+      else if (/^F\d{1,2}$/i.test(rawKey)) key = rawKey.toUpperCase();
+      else if (rawKey.length === 1) key = rawKey.toUpperCase();
+      else key = rawKey;
+      const ctrl = Boolean(ev.ctrlKey || ev.metaKey);
+      const alt = Boolean(ev.altKey);
+      const shift = Boolean(ev.shiftKey);
+      return normalizeShortcut((ctrl ? 'Ctrl+' : '') + (alt ? 'Alt+' : '') + (shift ? 'Shift+' : '') + key) || null;
+    }
+
+    function matchesShortcut(ev, binding) {
+      const target = normalizeShortcut(binding);
+      if (!target) return false;
+      const actual = formatShortcutFromEvent(ev);
+      return Boolean(actual) && actual === target;
+    }
+
+    function applyShortcutBinding(map, actionId, combo) {
+      const next = { ...DEFAULT_SHORTCUTS, ...(map || {}) };
+      const norm = normalizeShortcut(combo);
+      let clearedConflict = false;
+      if (norm) {
+        for (const k of SHORTCUT_ORDER) {
+          if (k !== actionId && normalizeShortcut(next[k]) === norm) {
+            next[k] = '';
+            clearedConflict = true;
+          }
+        }
+      }
+      next[actionId] = norm;
+      return { next, clearedConflict };
+    }
+
+    function loadShortcuts() {
+      try {
+        const raw = window.localStorage.getItem(SHORTCUTS_KEY);
+        if (!raw) return { ...DEFAULT_SHORTCUTS };
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { ...DEFAULT_SHORTCUTS };
+        const out = { ...DEFAULT_SHORTCUTS };
+        for (const k of SHORTCUT_ORDER) {
+          if (k in parsed) out[k] = normalizeShortcut(parsed[k]);
+        }
+        return out;
+      } catch (_e) {
+        return { ...DEFAULT_SHORTCUTS };
+      }
+    }
+
+    function saveShortcuts(map) {
+      try {
+        window.localStorage.setItem(SHORTCUTS_KEY, JSON.stringify(map));
+      } catch (_e) { /* ignore */ }
     }
 
     /** Pick 'left' or 'right' anchor so a wrapped toolbar dropdown never clips off the pane edge. */
@@ -1739,7 +2027,7 @@ window.__ModuleLoader__.load({
         if (!error) return this.props.children;
         const message = String((error && error.message) || error);
         const stack = String((error && error.stack) || '').slice(0, 900);
-        return h('div', {
+      return h('div', {
           style: {
             padding: '12px', fontFamily: 'ui-monospace, monospace', fontSize: '11px',
             color: '#e5534b', whiteSpace: 'pre-wrap', overflow: 'auto', height: '100%',
@@ -1764,6 +2052,11 @@ window.__ModuleLoader__.load({
       const [menuAlign, setMenuAlign] = useState('right');
       const [presetAlign, setPresetAlign] = useState('right');
       const [helpOpen, setHelpOpen] = useState(false);
+      const [shortcuts, setShortcuts] = useState(loadShortcuts);
+      const shortcutsRef = useRef(shortcuts);
+      shortcutsRef.current = shortcuts;
+      const [shortcutsOpen, setShortcutsOpen] = useState(false);
+      const [recordingAction, setRecordingAction] = useState(null);
       const [cutMode, setCutMode] = useState(loadCutMode);
       const [fxLevel, setFxLevel] = useState(loadEffectLevel);
       const [maxParallel, setMaxParallel] = useState(loadMaxParallel);
@@ -1793,6 +2086,8 @@ window.__ModuleLoader__.load({
       const pointerInsideRoot = useRef(false);
       const lastMouseRef = useRef(null);
       const [addMenu, setAddMenu] = useState(null);
+      const [ctxMenu, setCtxMenu] = useState(null);
+      const rightClickRef = useRef(null);
       const nodeDrag = useRef(null);
       const panDrag = useRef(null);
       const [panning, setPanning] = useState(false);
@@ -1811,6 +2106,7 @@ window.__ModuleLoader__.load({
       const [runsById, setRunsById] = useState({});
       const [runState, setRunState] = useState(null);
       const [decisionViewFor, setDecisionViewFor] = useState(null);
+      const [refsEditFor, setRefsEditFor] = useState(null);
       const [sessionRunning, setSessionRunning] = useState(false);
       const [runTriggering, setRunTriggering] = useState(false);
       const runTriggeringRef = useRef(false);
@@ -2189,6 +2485,7 @@ window.__ModuleLoader__.load({
           if (!e.ctrlKey && findScrollableChild(e.target, e.deltaY)) return;
           e.preventDefault();
           absorbScroll();
+          setCtxMenu(null);
           const rect = el.getBoundingClientRect();
           const mx = e.clientX - rect.left;
           const my = e.clientY - rect.top;
@@ -2436,6 +2733,63 @@ window.__ModuleLoader__.load({
         }
         setSelectedIds([newId]);
         setAddMenu(null);
+        setCtxMenu(null);
+      };
+
+      const deleteEdgeById = (edgeId) => {
+        pushSnapshot();
+        setEdges((es) => es.filter((e) => e.id !== edgeId));
+        setCtxMenu(null);
+        flash(t('linkCut') + ' ×1');
+      };
+
+      const insertNodeOnEdge = (edgeId, kind, atWorld) => {
+        const edge = edgesRef.current.find((e) => e.id === edgeId);
+        if (!edge) { setCtxMenu(null); return; }
+        pushSnapshot();
+        const normKind = kind === 'condition' ? 'condition' : 'agent';
+        const newId = 'n' + Date.now().toString(36) + Math.random().toString(36).slice(2, 4);
+        const prefs = lastNodePrefsRef.current || {};
+        setNodes((ns) => {
+          const i = ns.length;
+          const x = atWorld && typeof atWorld.x === 'number' ? Math.round(atWorld.x - NODE_W / 2) : 200;
+          const y = atWorld && typeof atWorld.y === 'number' ? Math.round(atWorld.y - NODE_H / 2) : 140;
+          const defaultLabel = normKind === 'condition'
+            ? (lang === 'en' ? 'Condition ' + i : '条件判断 ' + i)
+            : 'Node ' + i;
+          return [...ns, {
+            id: newId,
+            kind: normKind,
+            x,
+            y,
+            label: defaultLabel,
+            provider: prefs.provider || '',
+            model: prefs.model || '',
+            reasoning: prefs.reasoning || '',
+            preset: normKind === 'condition' ? 'minimal' : (prefs.preset || 'standard'),
+            role: '',
+          }];
+        });
+        setEdges((es) => {
+          const kept = es.filter((e) => e.id !== edgeId);
+          const e1 = {
+            id: 'e' + Date.now().toString(36) + 'a',
+            from: edge.from,
+            to: newId,
+            type: edge.type || 'prompt',
+          };
+          if (edge.branch) e1.branch = edge.branch;
+          const e2 = {
+            id: 'e' + Date.now().toString(36) + 'b',
+            from: newId,
+            to: edge.to,
+            type: 'prompt',
+          };
+          if (normKind === 'condition') e2.branch = 'true';
+          return kept.concat([e1, e2]);
+        });
+        setSelectedIds([newId]);
+        setCtxMenu(null);
       };
 
       const updateNode = (id, patch) => {
@@ -2477,25 +2831,11 @@ window.__ModuleLoader__.load({
       };
 
       const duplicateSelected = () => {
-        const curSel = selectedIdsRef.current;
-        const curNodes = nodesRef.current;
-        const sources = curSel
-          .filter((id) => id !== 'lead')
-          .map((id) => curNodes.find((n) => n.id === id))
-          .filter(Boolean);
-        if (!sources.length) return;
+        const { clones, clonedEdges } = cloneSelection(nodesRef.current, edgesRef.current, selectedIdsRef.current);
+        if (!clones.length) return;
         pushSnapshot();
-        const stamp = Date.now().toString(36);
-        const clones = sources.map((src, idx) => {
-          const { runs: _runs, ...rest } = src;
-          return {
-            ...rest,
-            id: 'n' + stamp + '_' + idx + Math.random().toString(36).slice(2, 4),
-            x: (src.x || 0) + 28,
-            y: (src.y || 0) + 28,
-          };
-        });
         setNodes((ns) => ns.concat(clones));
+        if (clonedEdges.length) setEdges((es) => es.concat(clonedEdges));
         setSelectedIds(clones.map((c) => c.id));
         flash(t('duplicatedNodes') + ' ×' + clones.length);
       };
@@ -2602,6 +2942,11 @@ window.__ModuleLoader__.load({
 
       /** Dragging any selected node moves the whole selection together. */
       const onNodeDown = (e, id) => {
+        if (e.button === 2) {
+          const tag = e.target && e.target.tagName;
+          if (tag !== 'INPUT' && tag !== 'TEXTAREA') e.stopPropagation();
+          return;
+        }
         if (e.button !== 0 || spaceDown.current) return;
         if (!contentRef.current) return;
         const node = nodes.find((n) => n.id === id);
@@ -2617,8 +2962,51 @@ window.__ModuleLoader__.load({
         setDragging(true);
         setOpenModelFor(null);
         setAddMenu(null);
+        setCtxMenu(null);
         e.preventDefault();
         e.stopPropagation();
+      };
+
+      const onNodeContextMenu = (e, node) => {
+        const tag = e.target && e.target.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+        e.preventDefault();
+        e.stopPropagation();
+        rightClickRef.current = null;
+        const wrap = canvasWrapRef.current;
+        if (!wrap) return;
+        if (!selectedIdsRef.current.includes(node.id)) setSelectedIds([node.id]);
+        const wrapRect = wrap.getBoundingClientRect();
+        const pos = clampMenuPos(e.clientX - wrapRect.left, e.clientY - wrapRect.top, wrapRect.width, wrapRect.height, 180, 176);
+        const world = pointTo(e);
+        setCtxMenu({ kind: 'node', nodeId: node.id, sx: pos.sx, sy: pos.sy, wx: world.x, wy: world.y });
+        setAddMenu(null);
+        setMenuOpen(false);
+        setPresetOpen(null);
+        setOpenModelFor(null);
+        setRoleEditFor(null);
+        setDecisionViewFor(null);
+        setRefsEditFor(null);
+      };
+
+      const addNodeRef = (node) => {
+        const cur = Array.isArray(node.refs) ? node.refs.slice() : [];
+        if (cur.length >= 16) return;
+        pushSnapshot();
+        updateNode(node.id, { refs: cur.concat(['']) });
+      };
+
+      const updateNodeRef = (node, idx, text) => {
+        const cur = Array.isArray(node.refs) ? node.refs.slice() : [];
+        cur[idx] = text;
+        updateNode(node.id, { refs: cur });
+      };
+
+      const removeNodeRef = (node, idx) => {
+        const cur = Array.isArray(node.refs) ? node.refs.slice() : [];
+        pushSnapshot();
+        cur.splice(idx, 1);
+        updateNode(node.id, { refs: cur });
       };
 
       const addConditionBranch = (node) => {
@@ -2812,12 +3200,12 @@ window.__ModuleLoader__.load({
         };
       }, []);
 
-      // Canvas keyboard shortcuts (Blender-style Shift+A, Ctrl+Z, Ctrl+D, Delete, Esc).
+      // Configurable canvas keyboard shortcuts (defaults: Shift+A, Shift+D, Delete, Ctrl+Z, Esc).
       const keyActionsRef = useRef(null);
       keyActionsRef.current = {
-        undo, deleteSelected, duplicateSelected, openAddMenuAtCursor, addNode,
-        addMenu, roleEditFor, openModelFor, menuOpen, presetOpen, helpOpen, decisionViewFor,
-        setAddMenu, setRoleEditFor, setOpenModelFor, setMenuOpen, setPresetOpen, setHelpOpen, setDecisionViewFor,
+        undo, deleteSelected, duplicateSelected, openAddMenuAtCursor, addNode, fitView, autoLayout, toggleDirection, flash, t,
+        addMenu, ctxMenu, roleEditFor, openModelFor, menuOpen, presetOpen, helpOpen, shortcutsOpen, recordingAction, decisionViewFor, refsEditFor,
+        setAddMenu, setCtxMenu, setRoleEditFor, setOpenModelFor, setMenuOpen, setPresetOpen, setHelpOpen, setShortcutsOpen, setRecordingAction, setShortcuts, setDecisionViewFor, setRefsEditFor,
       };
       useEffect(() => {
         const isEditable = (target) => {
@@ -2828,19 +3216,41 @@ window.__ModuleLoader__.load({
         const onKey = (ev) => {
           const act = keyActionsRef.current;
           if (!act) return;
+          if (act.recordingAction) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            if (ev.key === 'Escape') {
+              act.setRecordingAction(null);
+              return;
+            }
+            const combo = formatShortcutFromEvent(ev);
+            if (!combo) return;
+            const { next, clearedConflict } = applyShortcutBinding(shortcutsRef.current, act.recordingAction, combo);
+            shortcutsRef.current = next;
+            saveShortcuts(next);
+            act.setShortcuts(next);
+            act.setRecordingAction(null);
+            if (clearedConflict) act.flash(act.t('shortcutsConflict'));
+            return;
+          }
           if (ev.key === 'Escape') {
-            if (act.addMenu || act.roleEditFor || act.openModelFor || act.menuOpen || act.presetOpen || act.helpOpen || act.decisionViewFor) {
+            if (act.addMenu || act.ctxMenu || act.roleEditFor || act.openModelFor || act.menuOpen || act.presetOpen || act.helpOpen || act.shortcutsOpen || act.decisionViewFor || act.refsEditFor) {
               ev.preventDefault();
               act.setAddMenu(null);
+              act.setCtxMenu(null);
               act.setRoleEditFor(null);
               act.setOpenModelFor(null);
               act.setMenuOpen(false);
               act.setPresetOpen(null);
               act.setHelpOpen(false);
+              act.setShortcutsOpen(false);
+              act.setRecordingAction(null);
               act.setDecisionViewFor(null);
+              act.setRefsEditFor(null);
             }
             return;
           }
+          if (act.shortcutsOpen) return;
           if (isEditable(ev.target)) return;
           if (act.addMenu) {
             const lf = act.addMenu.linkFrom || null;
@@ -2863,23 +3273,41 @@ window.__ModuleLoader__.load({
           const root = rootElRef.current;
           const activeInRoot = Boolean(root && document.activeElement && root.contains(document.activeElement));
           if (!pointerInsideRoot.current && !activeInRoot) return;
-          const mod = ev.ctrlKey || ev.metaKey;
-          if (!mod && !ev.altKey && ev.shiftKey && (ev.key === 'A' || ev.key === 'a')) {
+          const sc = shortcutsRef.current || DEFAULT_SHORTCUTS;
+          if (matchesShortcut(ev, sc.addNode)) {
             ev.preventDefault();
             act.openAddMenuAtCursor();
             return;
           }
-          if (mod && !ev.shiftKey && !ev.altKey && (ev.key === 'z' || ev.key === 'Z')) {
+          if (matchesShortcut(ev, sc.undo)) {
             ev.preventDefault();
             act.undo();
             return;
           }
-          if (mod && !ev.shiftKey && !ev.altKey && (ev.key === 'd' || ev.key === 'D')) {
+          if (matchesShortcut(ev, sc.duplicate)) {
             ev.preventDefault();
             act.duplicateSelected();
             return;
           }
-          if (!mod && !ev.altKey && (ev.key === 'Delete' || ev.key === 'Backspace')) {
+          if (matchesShortcut(ev, sc.fitView)) {
+            ev.preventDefault();
+            act.fitView();
+            return;
+          }
+          if (matchesShortcut(ev, sc.autoLayout)) {
+            ev.preventDefault();
+            act.autoLayout();
+            return;
+          }
+          if (matchesShortcut(ev, sc.toggleDir)) {
+            ev.preventDefault();
+            act.toggleDirection();
+            return;
+          }
+          const allBound = Object.values(sc).map(normalizeShortcut);
+          const delHit = matchesShortcut(ev, sc.delete)
+            || (normalizeShortcut(sc.delete) === 'Delete' && !allBound.includes('Backspace') && matchesShortcut(ev, 'Backspace'));
+          if (delHit) {
             if (selectedIdsRef.current.length) {
               ev.preventDefault();
               act.deleteSelected();
@@ -2889,32 +3317,6 @@ window.__ModuleLoader__.load({
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
       }, []);
-
-      // Suppress the host context menu over the canvas while cutting is on.
-      useEffect(() => {
-        if (!cutMode) return undefined;
-        const inside = (ev) => {
-          const el = canvasElRef.current;
-          return Boolean(el) && ev.target instanceof Node && el.contains(ev.target);
-        };
-        const onCtx = (ev) => { if (inside(ev)) ev.preventDefault(); };
-        const onDown = (ev) => {
-          if (ev.button !== 2 || !inside(ev) || ev.target.closest('[data-node]')) return;
-          ev.preventDefault();
-          const start = pointTo(ev);
-          cutRef.current = start;
-          cutHits.current = new Set();
-          setCutPath([start]);
-          setCutVictims([]);
-          setDragging(true);
-        };
-        window.addEventListener('contextmenu', onCtx, true);
-        window.addEventListener('mousedown', onDown, true);
-        return () => {
-          window.removeEventListener('contextmenu', onCtx, true);
-          window.removeEventListener('mousedown', onDown, true);
-        };
-      }, [cutMode, sessionId]);
 
       useEffect(() => {
         if (!dragging) return undefined;
@@ -2930,22 +3332,20 @@ window.__ModuleLoader__.load({
 
       const onCanvasDown = (e) => {
         if (e.button === 2) {
-          if (!cutMode) return;
           e.preventDefault();
           try { window.getSelection().removeAllRanges(); } catch (_sel) { /* ignore */ }
           const start = pointTo(e);
-          cutRef.current = start;
-          cutHits.current = new Set();
-          setCutPath([start]);
-          setCutVictims([]);
+          rightClickRef.current = { clientX: e.clientX, clientY: e.clientY, start, moved: false };
           setDragging(true);
           return;
         }
         if (e.button !== 0) return;
         if (roleEditFor) setRoleEditFor(null);
         if (decisionViewFor) setDecisionViewFor(null);
+        if (refsEditFor) setRefsEditFor(null);
         if (menuOpen) setMenuOpen(false);
         if (addMenu) setAddMenu(null);
+        if (ctxMenu) setCtxMenu(null);
         if (presetOpen) setPresetOpen(null);
         e.preventDefault();
         try { window.getSelection().removeAllRanges(); } catch (_sel) { /* ignore */ }
@@ -2963,6 +3363,17 @@ window.__ModuleLoader__.load({
           const dy = e.clientY - pan.startY;
           commitView({ k: viewRef.current.k, x: pan.originX + dx, y: pan.originY + dy });
           return;
+        }
+        if (rightClickRef.current && !rightClickRef.current.moved) {
+          if (Math.hypot(e.clientX - rightClickRef.current.clientX, e.clientY - rightClickRef.current.clientY) >= 6) {
+            rightClickRef.current.moved = true;
+            if (cutMode) {
+              cutRef.current = rightClickRef.current.start;
+              cutHits.current = new Set();
+              setCutPath([rightClickRef.current.start]);
+              setCutVictims([]);
+            }
+          }
         }
         if (nodeDrag.current) {
           const p = pointTo(e);
@@ -3013,6 +3424,49 @@ window.__ModuleLoader__.load({
       };
 
       const onCanvasUp = (ev) => {
+        if (rightClickRef.current) {
+          const rc = rightClickRef.current;
+          rightClickRef.current = null;
+          if (!rc.moved) {
+            const wrap = canvasWrapRef.current;
+            if (wrap) {
+              const wrapRect = wrap.getBoundingClientRect();
+              const cx = rc.clientX - wrapRect.left;
+              const cy = rc.clientY - wrapRect.top;
+              const canvasSpot = { x: rc.start.x + WORLD_PAD, y: rc.start.y + WORLD_PAD };
+              const threshold = Math.max(10, 14 / (viewRef.current.k || 1));
+              const nodeMap = new Map(nodesRef.current.map((n) => [n.id, n]));
+              let hitEdge = null;
+              let bestDist = Infinity;
+              for (const edge of edgesRef.current) {
+                const source = nodeMap.get(edge.from);
+                const target = nodeMap.get(edge.to);
+                if (!source || !target) continue;
+                const dist = distanceToEdge(canvasSpot, source, target, edge, directionRef.current);
+                if (dist <= threshold && dist < bestDist) {
+                  bestDist = dist;
+                  hitEdge = edge;
+                }
+              }
+              setAddMenu(null);
+              setMenuOpen(false);
+              setPresetOpen(null);
+              setOpenModelFor(null);
+              setRoleEditFor(null);
+              setDecisionViewFor(null);
+              setRefsEditFor(null);
+              if (hitEdge) {
+                const pos = clampMenuPos(cx, cy, wrapRect.width, wrapRect.height, 180, 120);
+                setCtxMenu({ kind: 'edge', edgeId: hitEdge.id, sx: pos.sx, sy: pos.sy, wx: rc.start.x, wy: rc.start.y });
+              } else {
+                const pos = clampMenuPos(cx, cy, wrapRect.width, wrapRect.height, 186, 296);
+                setCtxMenu({ kind: 'canvas', sx: pos.sx, sy: pos.sy, wx: rc.start.x, wy: rc.start.y });
+              }
+            }
+            setDragging(false);
+            return;
+          }
+        }
         if (cutRef.current) {
           cutRef.current = null;
           setDragging(false);
@@ -3107,33 +3561,56 @@ window.__ModuleLoader__.load({
           const byId = new Map(existing.map((n) => [n.id, n]));
           const placed = new Map(existing.map((n) => [n.id, { x: n.x, y: n.y }]));
           let addedCount = 0;
+          const isTB = directionRef.current === 'tb';
           const incoming = doc.nodes.map((n, i) => {
             const prev = byId.get(n.id) || {};
             let x = typeof n.x === 'number' ? n.x : prev.x;
             let y = typeof n.y === 'number' ? n.y : prev.y;
             if (typeof x !== 'number' || typeof y !== 'number') {
-              // Place a newly patched node to the right of its first upstream node when possible.
+              // Place a newly patched node downstream of its first upstream node,
+              // respecting the active horizontal (lr) or vertical (tb) flow direction.
               const parentEdge = rawIncomingEdges.find((e) => e && e.to === n.id && placed.has(e.from));
               if (parentEdge) {
                 const parentPos = placed.get(parentEdge.from);
-                const siblingCount = Array.from(placed.values()).filter((p) => Math.abs(p.x - (parentPos.x + 300)) < 40).length;
-                x = parentPos.x + 300;
-                y = parentPos.y + siblingCount * 240;
+                const parentNode = byId.get(parentEdge.from);
+                if (isTB) {
+                  const targetY = parentPos.y + nodeHeight(parentNode) + 68;
+                  const siblingCount = Array.from(placed.values()).filter((p) => Math.abs(p.y - targetY) < 40).length;
+                  x = parentPos.x + siblingCount * 292;
+                  y = targetY;
+                } else {
+                  const siblingCount = Array.from(placed.values()).filter((p) => Math.abs(p.x - (parentPos.x + 300)) < 40).length;
+                  x = parentPos.x + 300;
+                  y = parentPos.y + siblingCount * 240;
+                }
               } else {
                 const leadPos = placed.get('lead') || { x: 40, y: 80 };
-                x = merge ? leadPos.x + 300 : 60 + i * 300;
-                y = merge ? leadPos.y + (addedCount + 1) * 240 : 80;
+                if (isTB) {
+                  x = merge ? leadPos.x + addedCount * 292 : 40 + i * 292;
+                  y = merge ? leadPos.y + NODE_H + 68 : 80;
+                } else {
+                  x = merge ? leadPos.x + 300 : 60 + i * 300;
+                  y = merge ? leadPos.y + (addedCount + 1) * 240 : 80;
+                }
               }
               addedCount += 1;
             }
             placed.set(n.id, { x, y });
             return { ...prev, ...n, x, y };
           });
-          if (!merge) return incoming;
+          if (!merge) {
+            return isTB ? layoutGraph(incoming, rawIncomingEdges, 'tb') : incoming;
+          }
           const touched = new Set(incoming.map((n) => n.id));
           const kept = existing
             .filter((n) => !touched.has(n.id) && !removedNodes.has(n.id))
-            .map((n) => (n.id === 'lead' && typeof doc.task === 'string' ? { ...n, task: doc.task } : n));
+            .map((n) => {
+              if (n.id !== 'lead') return n;
+              const patch = {};
+              if (typeof doc.task === 'string') patch.task = doc.task;
+              if (Array.isArray(doc.refs)) patch.refs = doc.refs;
+              return Object.keys(patch).length ? { ...n, ...patch } : n;
+            });
           return kept.concat(incoming);
         });
         setEdges((existing) => {
@@ -3408,7 +3885,7 @@ window.__ModuleLoader__.load({
         if (models.length === 1) {
           rows.push(h('div', { key: 'single-hint', style: S.presetEmpty }, t('singleModelHint')));
         }
-        return h('div', { ref: isOpen ? dropdownRef : undefined, style: { position: 'relative', flex: '1 1 auto', minWidth: 0 } },
+      return h('div', { ref: isOpen ? dropdownRef : undefined, style: { position: 'relative', flex: '1 1 auto', minWidth: 0 } },
           h('button', {
             style: S.selectBtn,
             type: 'button',
@@ -3454,7 +3931,7 @@ window.__ModuleLoader__.load({
           }, t('memLatestOpt')),
           ...history.map((item) => {
             const selectedRow = node.memoryChildId === item.childId;
-            return h('div', {
+      return h('div', {
               key: item.childId,
               style: selectedRow ? { ...S.menuRow, background: C.hover, color: C.accent } : S.menuRow,
               title: item.childId,
@@ -3465,7 +3942,7 @@ window.__ModuleLoader__.load({
           }),
           !history.length && h('div', { key: 'mem-empty', style: S.presetEmpty }, t('memEmpty')),
         ];
-        return h('div', { style: { display: 'flex', alignItems: 'center', gap: '4px', flex: '1 1 auto', minWidth: 0 } },
+      return h('div', { style: { display: 'flex', alignItems: 'center', gap: '4px', flex: '1 1 auto', minWidth: 0 } },
           toggleBtn,
           h('div', { ref: isOpen ? dropdownRef : undefined, style: { position: 'relative', flex: '0 0 64px', width: '64px' } },
             h('button', {
@@ -3505,7 +3982,7 @@ window.__ModuleLoader__.load({
           onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
           onClick: () => { updateNode(node.id, { reasoning: id }); setOpenModelFor(null); },
         }, labelOf(id)));
-        return h('div', { ref: isOpen ? dropdownRef : undefined, style: { position: 'relative', flex: '1 1 auto', minWidth: 0 } },
+      return h('div', { ref: isOpen ? dropdownRef : undefined, style: { position: 'relative', flex: '1 1 auto', minWidth: 0 } },
           h('button', {
             style: S.selectBtn,
             type: 'button',
@@ -3562,7 +4039,7 @@ window.__ModuleLoader__.load({
             onClick: () => { updateNode(node.id, { provider: m.provider, model: m.model }); setOpenModelFor(null); },
           }, m.modelName || m.model));
         }
-        return h('div', { ref: isOpen ? dropdownRef : undefined, style: { position: 'relative', flex: '1 1 auto', minWidth: 0 } },
+      return h('div', { ref: isOpen ? dropdownRef : undefined, style: { position: 'relative', flex: '1 1 auto', minWidth: 0 } },
           h('button', {
             style: S.selectBtn,
             type: 'button',
@@ -3612,8 +4089,18 @@ window.__ModuleLoader__.load({
       const leadDoneIds = new Set();
       const hasCondNode = nodes.some((x) => x.kind === 'condition');
       if (enabled) {
+        if (runState && runState.waitingLead && runState.waitingLead.id) {
+          leadReadyIds.add(runState.waitingLead.id);
+        }
+        if (runState && Array.isArray(runState.done)) {
+          for (const did of runState.done) {
+            const dn = nodeById.get(did);
+            if (dn && dn.kind === 'lead' && dn.id !== 'lead') leadDoneIds.add(did);
+          }
+        }
         for (const n of nodes) {
           if (n.kind !== 'lead' || n.id === 'lead' || !reachableIds.has(n.id)) continue;
+          if (leadReadyIds.has(n.id) || leadDoneIds.has(n.id)) continue;
           const upIds = edges
             .filter((e) => e.to === n.id && e.from !== 'lead' && nodeById.has(e.from))
             .map((e) => e.from);
@@ -3764,7 +4251,7 @@ window.__ModuleLoader__.load({
           const condDec = decisionsById[node.id] || null;
           const matchedBranchIds = condDec && Array.isArray(condDec.branches) ? new Set(condDec.branches) : null;
           const onLeft = isTB && node.tbSide === 'left';
-          return h('div', { style: S.band },
+      return h('div', { style: S.band },
             unifiedInSocket,
             !isTB && h('span', { style: { ...S.rowLabel, position: 'absolute', left: '12px', top: '3px', pointerEvents: 'none' } }, inText),
             branches.map((b) => {
@@ -3775,7 +4262,7 @@ window.__ModuleLoader__.load({
                 ? (b.id === 'true' ? t('tipCondTrue') : t('tipCondFalse'))
                 : t('tipBranchOut');
               const editKey = 'branch:' + node.id + ':' + b.id;
-              return h('div', {
+      return h('div', {
                 key: b.id,
                 style: {
                   ...S.condBranchRow,
@@ -3789,18 +4276,10 @@ window.__ModuleLoader__.load({
                     alignItems: 'center',
                     marginLeft: onLeft ? '10px' : 0,
                     marginRight: onLeft ? 0 : '10px',
-                    flexDirection: onLeft ? 'row-reverse' : 'row',
+                    gap: '2px',
                   },
                   onMouseDown: (e) => e.stopPropagation(),
                 },
-                  h('button', {
-                    type: 'button',
-                    style: { ...S.condBranchExpand, marginRight: onLeft ? 0 : '2px', marginLeft: onLeft ? '2px' : 0 },
-                    title: t('tipExpandBranch'),
-                    onMouseEnter: (e) => { e.currentTarget.style.color = C.text; e.currentTarget.style.borderColor = b.color; },
-                    onMouseLeave: (e) => { e.currentTarget.style.color = C.dim; e.currentTarget.style.borderColor = C.border; },
-                    onClick: () => setRoleEditFor(roleEditFor === editKey ? null : editKey),
-                  }, '⤢'),
                   h('input', {
                     style: {
                       ...S.condBranchInput,
@@ -3813,16 +4292,22 @@ window.__ModuleLoader__.load({
                     onFocus: () => setSelectedIds([node.id]),
                     onChange: (e) => renameConditionBranch(node, b.id, e.target.value),
                   }),
-                  branches.length > 2
-                    ? h('button', {
-                        type: 'button',
-                        style: { ...S.condBranchDel, marginLeft: onLeft ? 0 : '2px', marginRight: onLeft ? '2px' : 0 },
-                        title: t('delBranchTip'),
-                        onMouseEnter: (e) => { e.currentTarget.style.color = '#e5534b'; },
-                        onMouseLeave: (e) => { e.currentTarget.style.color = C.dim; },
-                        onClick: () => removeConditionBranch(node, b.id),
-                      }, '×')
-                    : h('span', { style: S.condBranchDelSpacer }),
+                  h('button', {
+                    type: 'button',
+                    style: { ...S.condBranchExpand, marginRight: 0 },
+                    title: t('tipExpandBranch'),
+                    onMouseEnter: (e) => { e.currentTarget.style.color = C.text; e.currentTarget.style.borderColor = b.color; },
+                    onMouseLeave: (e) => { e.currentTarget.style.color = C.dim; e.currentTarget.style.borderColor = C.border; },
+                    onClick: () => setRoleEditFor(roleEditFor === editKey ? null : editKey),
+                  }, '⤢'),
+                  branches.length > 2 && h('button', {
+                    type: 'button',
+                    style: { ...S.condBranchDel, marginLeft: 0 },
+                    title: t('delBranchTip'),
+                    onMouseEnter: (e) => { e.currentTarget.style.color = '#e5534b'; },
+                    onMouseLeave: (e) => { e.currentTarget.style.color = C.dim; },
+                    onClick: () => removeConditionBranch(node, b.id),
+                  }, '×'),
                 ),
                 roleEditFor === editKey && h('div', {
                   style: { ...S.rolePopover, top: '-8px' },
@@ -3903,7 +4388,7 @@ window.__ModuleLoader__.load({
           !isEntry && h('span', { style: { ...S.rowLabel, position: 'absolute', left: '12px', top: '3px', pointerEvents: 'none' } }, inText),
           SOCKET_TYPES.map((sock) => {
             const outLinked = connectedOut.has(node.id + '|' + sock.id);
-            return h('div', { key: sock.id, style: S.row },
+      return h('div', { key: sock.id, style: S.row },
               h('span', { style: { ...S.rowLabel, position: 'absolute', right: '12px' } }, sock.label),
               h('div', {
                 style: {
@@ -3939,6 +4424,84 @@ window.__ModuleLoader__.load({
           .map((n) => n.id);
       };
 
+      /** Compact "+ 参考" trigger docked cleanly in the top-right of every node header bar. */
+      const refsControlBtn = (node) => {
+        const count = normalizeRefsUI(node.refs).length;
+        const isOpen = refsEditFor === node.id;
+        return h('button', {
+          type: 'button',
+          style: {
+            ...(count > 0 || isOpen ? S.condModeBtnOn : S.condAddBtn),
+            position: 'absolute',
+            top: '9px',
+            right: '10px',
+            zIndex: 7,
+            whiteSpace: 'nowrap',
+            flex: '0 0 auto',
+          },
+          title: t('tipRefs'),
+          onMouseDown: (e) => e.stopPropagation(),
+          onClick: (e) => {
+            e.stopPropagation();
+            setRoleEditFor(null);
+            setRefsEditFor(isOpen ? null : node.id);
+          },
+        }, count > 0 ? (t('refsBtn') + '×' + count) : ('+ ' + t('refsBtn')));
+      };
+
+      const refsPopoverEl = (node) => {
+        if (refsEditFor !== node.id) return null;
+        const list = Array.isArray(node.refs) ? node.refs : [];
+        const isGlobal = node.id === 'lead';
+        return h('div', {
+          style: S.refsPopover,
+          onMouseDown: (e) => e.stopPropagation(),
+        },
+          h('div', {
+            style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px', fontSize: '10px', fontWeight: 600, color: C.dim },
+          },
+            h('span', null, (isGlobal ? t('refsTitleGlobal') : t('refsTitleNode')) + ' (' + list.length + '/16)'),
+            h('button', {
+              type: 'button',
+              style: { background: 'transparent', border: 'none', color: C.dim, cursor: 'pointer', fontSize: '12px', padding: '0 2px' },
+              onClick: () => setRefsEditFor(null),
+            }, '×'),
+          ),
+          list.length === 0
+            ? h('div', { style: { fontSize: '10px', color: C.dim, marginBottom: '6px', lineHeight: '1.4' } }, t('refsEmpty'))
+            : h('div', { style: { maxHeight: '168px', overflowY: 'auto', marginBottom: '4px' } },
+                list.map((val, idx) => h('div', { key: 'ref-' + idx, style: S.refsRow },
+                  h('input', {
+                    style: S.refsInput,
+                    value: typeof val === 'string' ? val : '',
+                    placeholder: t('refsPh'),
+                    autoFocus: idx === list.length - 1 && val === '',
+                    onKeyDown: (e) => {
+                      if (e.key === 'Enter' && list.length < 16) {
+                        e.preventDefault();
+                        addNodeRef(node);
+                      }
+                    },
+                    onChange: (e) => updateNodeRef(node, idx, e.target.value),
+                  }),
+                  h('button', {
+                    type: 'button',
+                    style: S.condBranchDel,
+                    title: t('delRefTip'),
+                    onMouseEnter: (e) => { e.currentTarget.style.color = '#e5534b'; },
+                    onMouseLeave: (e) => { e.currentTarget.style.color = C.dim; },
+                    onClick: () => removeNodeRef(node, idx),
+                  }, '×'),
+                )),
+              ),
+          list.length < 16 && h('button', {
+            type: 'button',
+            style: { ...S.btn, width: '100%', padding: '3px 8px', fontSize: '10px', textAlign: 'center' },
+            onClick: () => addNodeRef(node),
+          }, t('refsAdd')),
+        );
+      };
+
       return h('div', {
         ref: rootElRef,
         style: S.root,
@@ -3950,27 +4513,12 @@ window.__ModuleLoader__.load({
           h('button', { style: S.btn, onClick: () => addNode('lead'), type: 'button' }, t('addLead')),
           h('button', { style: S.btn, onClick: () => addNode('condition'), type: 'button' }, t('addCond')),
           h('span', { style: S.toolSep }),
-          h('button', { style: S.btn, onClick: undo, type: 'button', title: t('tipUndo') }, t('undo')),
           h('button', {
             style: enabled && dirty ? S.btnDirty : S.btn,
             onClick: () => pushPlan(enabled),
             type: 'button',
             title: t('tipSync'),
           }, t('sync')),
-          h('span', { style: S.toolSep }),
-          h('button', {
-            style: S.btn,
-            onClick: () => fitView(),
-            type: 'button',
-            title: t('tipLocate'),
-          }, t('locate')),
-          h('button', {
-            style: { ...S.btn, cursor: 'ew-resize', minWidth: '50px', textAlign: 'center', fontVariantNumeric: 'tabular-nums' },
-            onMouseDown: onZoomPillDown,
-            onKeyDown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); focusLead(1); } },
-            type: 'button',
-            title: t('tipResetZoom'),
-          }, Math.round(view.k * 100) + '%'),
           h('button', {
             style: S.btn,
             onClick: toggleDirection,
@@ -3978,117 +4526,6 @@ window.__ModuleLoader__.load({
             title: t('tipDir'),
           }, direction === 'tb' ? t('dirTB') : t('dirLR')),
           syncNote ? h('span', { style: S.syncNote, title: syncNote }, syncNote) : null,
-          h('span', { style: S.toolSep }),
-          h('button', {
-            style: S.btn,
-            onClick: toggleLang,
-            type: 'button',
-            title: 'Switch language / 切换语言',
-          }, t('lang')),
-          h('div', { style: S.moreBar },
-            h('button', {
-              style: S.btn,
-              type: 'button',
-              title: t('tipMore'),
-              onMouseDown: (e) => e.stopPropagation(),
-              onClick: (e) => {
-                const next = !menuOpen;
-                if (next) {
-                  setPresetOpen(null);
-                  const rootRect = rootElRef.current && rootElRef.current.getBoundingClientRect();
-                  const btnRect = e.currentTarget && e.currentTarget.getBoundingClientRect();
-                  setMenuAlign(dropdownAlign(btnRect, rootRect, 204));
-                }
-                setMenuOpen(next);
-              },
-            }, '⋯'),
-            menuOpen && h('div', {
-              style: {
-                ...S.moreMenu,
-                left: menuAlign === 'left' ? 0 : 'auto',
-                right: menuAlign === 'left' ? 'auto' : 0,
-              },
-              onMouseDown: (e) => e.stopPropagation(),
-            },
-              h('div', {
-                style: S.moreRow,
-                onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
-                onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
-                onClick: () => { setMenuOpen(false); importFromClipboard(); },
-              }, t('importBtn')),
-              h('div', {
-                style: S.moreRow,
-                onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
-                onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
-                onClick: () => { setMenuOpen(false); exportToClipboard(); },
-              }, t('exportBtn')),
-              h('div', {
-                style: S.moreRow,
-                onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
-                onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
-                onClick: () => { setMenuOpen(false); autoLayout(); },
-              }, t('autoLayoutBtn')),
-              h('div', {
-                style: { ...S.moreRow, color: '#e5534b' },
-                onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
-                onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
-                onClick: () => { clearCanvas(); },
-              }, t('clearCanvasBtn')),
-              h('div', {
-                style: S.moreRow,
-                onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
-                onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
-                onClick: () => {
-                  const next = nextEffectLevel(fxLevel);
-                  setFxLevel(next);
-                  saveEffectLevel(next);
-                  flash(t('fxLabel') + t('sep') + fxName(next));
-                },
-              }, t('fxLabel') + t('sep') + fxName(fxLevel)),
-              h('div', {
-                style: { ...S.moreRow, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' },
-                title: t('tipMaxParallel'),
-                onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
-                onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
-                onClick: () => {
-                  const next = nextMaxParallel(maxParallel);
-                  setMaxParallel(next);
-                  maxParallelRef.current = next;
-                  saveMaxParallel(next);
-                  if (enabled) pushPlan(true, undefined, undefined, next);
-                  else flash(t('maxParallelLabel') + t('sep') + next);
-                },
-              },
-                h('span', null, t('maxParallelLabel') + t('sep') + maxParallel),
-                h('span', {
-                  title: t('tipMaxParallel'),
-                  style: {
-                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                    width: '14px', height: '14px', borderRadius: '50%',
-                    border: '1px solid ' + (maxParallel > 4 ? '#d29922' : C.dim),
-                    color: maxParallel > 4 ? '#d29922' : C.dim,
-                    fontSize: '10px', fontWeight: 700, lineHeight: '12px', flex: '0 0 auto',
-                  },
-                }, '!'),
-              ),
-              h('div', {
-                style: S.moreRow,
-                onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
-                onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
-                onClick: () => {
-                  const next = !cutMode;
-                  setCutMode(next);
-                  saveCutMode(next);
-                },
-              }, t('cutLinks') + t('sep') + (cutMode ? t('on') : t('off'))),
-              h('div', {
-                style: S.moreRow,
-                onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
-                onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
-                onClick: () => { setMenuOpen(false); setHelpOpen(true); },
-              }, t('help')),
-            ),
-          ),
           h('div', { style: S.presetBar },
             (() => {
               const feedback = status || (enabled ? (dirty ? t('unsaved') : t('synced')) : '');
@@ -4102,6 +4539,7 @@ window.__ModuleLoader__.load({
                   const next = presetOpen === 'menu' ? null : 'menu';
                   if (next) {
                     setMenuOpen(false);
+                    setCtxMenu(null);
                     const rootRect = rootElRef.current && rootElRef.current.getBoundingClientRect();
                     const btnRect = e.currentTarget && e.currentTarget.getBoundingClientRect();
                     setPresetAlign(dropdownAlign(btnRect, rootRect, 248));
@@ -4170,9 +4608,145 @@ window.__ModuleLoader__.load({
                 }, h('span', { style: S.presetRowText, title: tpl.name }, tpl.name))),
               );
             })(),
+            h('div', { style: S.moreBar },
+              h('button', {
+                style: S.btn,
+                type: 'button',
+                title: t('tipMore'),
+                onMouseDown: (e) => e.stopPropagation(),
+                onClick: (e) => {
+                  const next = !menuOpen;
+                  if (next) {
+                    setPresetOpen(null);
+                    setCtxMenu(null);
+                    const rootRect = rootElRef.current && rootElRef.current.getBoundingClientRect();
+                    const btnRect = e.currentTarget && e.currentTarget.getBoundingClientRect();
+                    setMenuAlign(dropdownAlign(btnRect, rootRect, 204));
+                  }
+                  setMenuOpen(next);
+                },
+              }, '⋯'),
+              menuOpen && h('div', {
+                style: {
+                  ...S.moreMenu,
+                  left: menuAlign === 'left' ? 0 : 'auto',
+                  right: menuAlign === 'left' ? 'auto' : 0,
+                },
+                onMouseDown: (e) => e.stopPropagation(),
+              },
+                h('div', {
+                  style: S.moreRow,
+                  title: t('tipUndo'),
+                  onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+                  onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+                  onClick: () => { setMenuOpen(false); undo(); },
+                }, t('undo')),
+                h('div', {
+                  style: S.moreRow,
+                  title: t('tipLocate'),
+                  onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+                  onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+                  onClick: () => { setMenuOpen(false); fitView(); },
+                }, t('locate')),
+                h('div', { style: S.ctxDivider }),
+                h('div', {
+                  style: S.moreRow,
+                  onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+                  onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+                  onClick: () => { setMenuOpen(false); importFromClipboard(); },
+                }, t('importBtn')),
+                h('div', {
+                  style: S.moreRow,
+                  onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+                  onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+                  onClick: () => { setMenuOpen(false); exportToClipboard(); },
+                }, t('exportBtn')),
+                h('div', {
+                  style: S.moreRow,
+                  onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+                  onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+                  onClick: () => { setMenuOpen(false); autoLayout(); },
+                }, t('autoLayoutBtn')),
+                h('div', {
+                  style: { ...S.moreRow, color: '#e5534b' },
+                  onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+                  onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+                  onClick: () => { clearCanvas(); },
+                }, t('clearCanvasBtn')),
+                h('div', { style: S.ctxDivider }),
+                h('div', {
+                  style: S.moreRow,
+                  onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+                  onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+                  onClick: () => {
+                    const next = nextEffectLevel(fxLevel);
+                    setFxLevel(next);
+                    saveEffectLevel(next);
+                    flash(t('fxLabel') + t('sep') + fxName(next));
+                  },
+                }, t('fxLabel') + t('sep') + fxName(fxLevel)),
+                h('div', {
+                  style: { ...S.moreRow, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' },
+                  title: t('tipMaxParallel'),
+                  onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+                  onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+                  onClick: () => {
+                    const next = nextMaxParallel(maxParallel);
+                    setMaxParallel(next);
+                    maxParallelRef.current = next;
+                    saveMaxParallel(next);
+                    if (enabled) pushPlan(true, undefined, undefined, next);
+                    else flash(t('maxParallelLabel') + t('sep') + next);
+                  },
+                },
+                  h('span', null, t('maxParallelLabel') + t('sep') + maxParallel),
+                  h('span', {
+                    title: t('tipMaxParallel'),
+                    style: {
+                      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                      width: '14px', height: '14px', borderRadius: '50%',
+                      border: '1px solid ' + (maxParallel > 4 ? '#d29922' : C.dim),
+                      color: maxParallel > 4 ? '#d29922' : C.dim,
+                      fontSize: '10px', fontWeight: 700, lineHeight: '12px', flex: '0 0 auto',
+                    },
+                  }, '!'),
+                ),
+                h('div', {
+                  style: S.moreRow,
+                  onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+                  onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+                  onClick: () => {
+                    const next = !cutMode;
+                    setCutMode(next);
+                    saveCutMode(next);
+                  },
+                }, t('cutLinks') + t('sep') + (cutMode ? t('on') : t('off'))),
+                h('div', {
+                  style: S.moreRow,
+                  onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+                  onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+                  onClick: () => { toggleLang(); },
+                }, t('ctxLangToggle') + t('sep') + (lang === 'zh' ? '中文' : 'EN')),
+                h('div', {
+                  style: S.moreRow,
+                  onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+                  onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+                  onClick: () => { setMenuOpen(false); setRecordingAction(null); setShortcutsOpen(true); },
+                }, t('shortcutsMenu')),
+                h('div', {
+                  style: S.moreRow,
+                  onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+                  onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+                  onClick: () => { setMenuOpen(false); setHelpOpen(true); },
+                }, t('help')),
+              ),
+            ),
           ),
         ),
-        helpOpen && h('div', { style: S.helpOverlay, onMouseDown: (e) => e.stopPropagation() },
+        helpOpen && h('div', {
+          style: S.helpOverlay,
+          onMouseDown: (e) => { e.stopPropagation(); if (e.target === e.currentTarget) setHelpOpen(false); },
+        },
           h('div', { style: S.helpCard },
             h('div', { style: S.helpHead },
               h('span', { style: S.helpTitle }, t('helpTitle')),
@@ -4181,10 +4755,92 @@ window.__ModuleLoader__.load({
             h('div', { style: S.helpBody }, t('helpBody').split('\n').map((line, i) => h('div', { key: i, style: S.helpLine }, line))),
           ),
         ),
+        shortcutsOpen && (() => {
+          const actionLabels = {
+            addNode: t('scAddNode'),
+            duplicate: t('scDuplicate'),
+            delete: t('scDelete'),
+            undo: t('scUndo'),
+            fitView: t('scFitView'),
+            autoLayout: t('scAutoLayout'),
+            toggleDir: t('scToggleDir'),
+          };
+          return h('div', {
+            style: S.helpOverlay,
+            onMouseDown: (e) => {
+              e.stopPropagation();
+              if (e.target === e.currentTarget) {
+                setRecordingAction(null);
+                setShortcutsOpen(false);
+              }
+            },
+          },
+            h('div', { style: { ...S.helpCard, maxWidth: '360px' } },
+              h('div', { style: S.helpHead },
+                h('span', { style: S.helpTitle }, t('shortcutsTitle')),
+                h('button', {
+                  style: S.btn,
+                  type: 'button',
+                  onClick: () => {
+                    const resetMap = { ...DEFAULT_SHORTCUTS };
+                    shortcutsRef.current = resetMap;
+                    saveShortcuts(resetMap);
+                    setShortcuts(resetMap);
+                    setRecordingAction(null);
+                    flash(t('shortcutsResetOk'));
+                  },
+                }, t('shortcutsReset')),
+                h('button', {
+                  style: S.btn,
+                  type: 'button',
+                  onClick: () => { setRecordingAction(null); setShortcutsOpen(false); },
+                }, t('close')),
+              ),
+              h('div', { style: { fontSize: '10px', color: C.dim, marginBottom: '8px', lineHeight: '1.45' } }, t('shortcutsHint')),
+              SHORTCUT_ORDER.map((actionId, idx) => {
+                const binding = shortcuts[actionId] || '';
+                const isRec = recordingAction === actionId;
+                return h('div', {
+                  key: actionId,
+                  style: idx === SHORTCUT_ORDER.length - 1 ? { ...S.shortcutRow, borderBottom: 'none' } : S.shortcutRow,
+                },
+                  h('span', null, actionLabels[actionId] || actionId),
+                  h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px' } },
+                    h('button', {
+                      type: 'button',
+                      style: isRec ? { ...S.shortcutKeyBtn, ...S.shortcutKeyRec } : (binding ? S.shortcutKeyBtn : { ...S.shortcutKeyBtn, color: C.dim }),
+                      onClick: () => setRecordingAction(isRec ? null : actionId),
+                    }, isRec ? t('shortcutsPress') : (binding || t('shortcutsUnset'))),
+                    binding
+                      ? h('button', {
+                          type: 'button',
+                          style: S.condBranchDel,
+                          title: t('del'),
+                          onMouseEnter: (e) => { e.currentTarget.style.color = '#e5534b'; },
+                          onMouseLeave: (e) => { e.currentTarget.style.color = C.dim; },
+                          onClick: () => {
+                            const { next } = applyShortcutBinding(shortcutsRef.current, actionId, '');
+                            shortcutsRef.current = next;
+                            saveShortcuts(next);
+                            setShortcuts(next);
+                            if (recordingAction === actionId) setRecordingAction(null);
+                          },
+                        }, '×')
+                      : h('span', { style: S.condBranchDelSpacer }),
+                  ),
+                );
+              }),
+            ),
+          );
+        })(),
         h('div', {
           ref: canvasWrapRef,
           style: S.canvasWrap,
           onMouseMove: (e) => { lastMouseRef.current = { clientX: e.clientX, clientY: e.clientY }; },
+          onContextMenu: (e) => {
+            const tag = e.target && e.target.tagName;
+            if (tag !== 'INPUT' && tag !== 'TEXTAREA') e.preventDefault();
+          },
         },
           h('button', {
             style: enabled
@@ -4216,7 +4872,7 @@ window.__ModuleLoader__.load({
             const lf = addMenu.linkFrom || null;
             const srcNode = lf && lf.fromId ? nodeById.get(lf.fromId) : null;
             const compat = lf ? compatibleTargetsForWire(srcNode, lf.type) : { agent: true, lead: true, condition: true, leadBlockedReason: '' };
-            return h('div', {
+      return h('div', {
               style: { ...S.addMenu, left: addMenu.sx + 'px', top: addMenu.sy + 'px' },
               onMouseDown: (e) => e.stopPropagation(),
             },
@@ -4242,6 +4898,100 @@ window.__ModuleLoader__.load({
               }, h('span', null, t('addCond')), h('span', { style: S.addMenuHint }, '3')),
             );
           })(),
+          ctxMenu && (() => {
+            const menuRow = (key, label, onClick, opts) => {
+              const danger = opts && opts.danger;
+              const hint = opts && opts.hint;
+              return h('div', {
+                key,
+                style: danger ? { ...S.addMenuRow, color: '#e5534b' } : S.addMenuRow,
+                onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+                onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+                onClick,
+              }, h('span', null, label), hint ? h('span', { style: S.addMenuHint }, hint) : null);
+            };
+            if (ctxMenu.kind === 'node') {
+              const target = nodeById.get(ctxMenu.nodeId);
+              if (!target) return null;
+              const multiSel = selectedIds.length > 1 && selectedSet.has(target.id);
+              const nonLeadCount = (multiSel ? selectedIds : [target.id]).filter((id) => id !== 'lead').length;
+              const suffix = nonLeadCount > 1 ? ' ×' + nonLeadCount : '';
+              const latestRun = target.kind !== 'lead' ? runsById[target.id] : null;
+              return h('div', {
+                style: { ...S.addMenu, minWidth: '172px', left: ctxMenu.sx + 'px', top: ctxMenu.sy + 'px' },
+                onMouseDown: (e) => e.stopPropagation(),
+                onContextMenu: (e) => e.preventDefault(),
+              },
+                h('div', { style: S.addMenuHead }, t('ctxNodeTitle')),
+                menuRow('edit', t('ctxEditText'), () => { setCtxMenu(null); setRoleEditFor(target.id); }),
+                menuRow('refs', t('ctxManageRefs'), () => { setCtxMenu(null); setRefsEditFor(target.id); }),
+                latestRun && menuRow('chat', t('ctxOpenChat'), () => { setCtxMenu(null); openNodeSession(target); }),
+                nonLeadCount > 0 && h('div', { style: S.ctxDivider }),
+                nonLeadCount > 0 && menuRow('dup', t('ctxDup') + suffix, () => { setCtxMenu(null); duplicateSelected(); }, { hint: shortcuts.duplicate || '' }),
+                nonLeadCount > 0 && menuRow('del', t('ctxDelNode') + suffix, () => {
+                  setCtxMenu(null);
+                  if (multiSel) deleteSelected();
+                  else deleteNode(target.id);
+                }, { danger: true, hint: shortcuts.delete === 'Delete' ? 'Del' : (shortcuts.delete || '') }),
+              );
+            }
+            if (ctxMenu.kind === 'edge') {
+              const targetEdge = edges.find((ed) => ed.id === ctxMenu.edgeId);
+              if (!targetEdge) return null;
+              return h('div', {
+                style: { ...S.addMenu, minWidth: '172px', left: ctxMenu.sx + 'px', top: ctxMenu.sy + 'px' },
+                onMouseDown: (e) => e.stopPropagation(),
+                onContextMenu: (e) => e.preventDefault(),
+              },
+                h('div', { style: S.addMenuHead }, t('ctxEdgeTitle')),
+                menuRow('ins-agent', t('ctxInsertAgent'), () => insertNodeOnEdge(targetEdge.id, 'agent', { x: ctxMenu.wx, y: ctxMenu.wy })),
+                menuRow('ins-cond', t('ctxInsertCond'), () => insertNodeOnEdge(targetEdge.id, 'condition', { x: ctxMenu.wx, y: ctxMenu.wy })),
+                h('div', { style: S.ctxDivider }),
+                menuRow('del-edge', t('ctxDelEdge'), () => deleteEdgeById(targetEdge.id), { danger: true }),
+              );
+            }
+            return h('div', {
+              style: { ...S.addMenu, minWidth: '176px', left: ctxMenu.sx + 'px', top: ctxMenu.sy + 'px' },
+              onMouseDown: (e) => e.stopPropagation(),
+              onContextMenu: (e) => e.preventDefault(),
+            },
+              h('div', { style: S.addMenuHead }, t('ctxCanvasTitle')),
+              menuRow('add-agent', t('addAgent'), () => addNode('agent', { x: ctxMenu.wx, y: ctxMenu.wy })),
+              menuRow('add-lead', t('addLead'), () => addNode('lead', { x: ctxMenu.wx, y: ctxMenu.wy })),
+              menuRow('add-cond', t('addCond'), () => addNode('condition', { x: ctxMenu.wx, y: ctxMenu.wy })),
+              h('div', { style: S.ctxDivider }),
+              menuRow('undo', t('undo'), () => { setCtxMenu(null); undo(); }, { hint: shortcuts.undo || '' }),
+              menuRow('layout', t('autoLayoutBtn'), () => { setCtxMenu(null); autoLayout(); }, { hint: shortcuts.autoLayout || '' }),
+              menuRow('dir', direction === 'tb' ? t('dirLR') : t('dirTB'), () => { setCtxMenu(null); toggleDirection(); }, { hint: shortcuts.toggleDir || '' }),
+              menuRow('fit', t('locate'), () => { setCtxMenu(null); fitView(); }, { hint: shortcuts.fitView || '' }),
+              h('div', { style: S.ctxDivider }),
+              menuRow('imp', t('importBtn'), () => { setCtxMenu(null); importFromClipboard(); }),
+              menuRow('clr', t('clearCanvasBtn'), () => { setCtxMenu(null); clearCanvas(); }, { danger: true }),
+            );
+          })(),
+          h('div', {
+            style: S.floatZoomBar,
+            onMouseDown: (e) => e.stopPropagation(),
+          },
+            h('button', {
+              style: S.floatZoomBtn,
+              type: 'button',
+              title: t('tipLocate'),
+              onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+              onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+              onClick: () => fitView(),
+            }, '⊡'),
+            h('span', { style: { width: '1px', height: '12px', background: C.border, opacity: 0.7 } }),
+            h('button', {
+              style: { ...S.floatZoomBtn, cursor: 'ew-resize', minWidth: '42px', textAlign: 'center', fontVariantNumeric: 'tabular-nums' },
+              type: 'button',
+              title: t('tipResetZoom'),
+              onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+              onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+              onMouseDown: onZoomPillDown,
+              onKeyDown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); focusLead(1); } },
+            }, Math.round(view.k * 100) + '%'),
+          ),
           h('div', {
             ref: canvasElRef,
             style: {
@@ -4334,6 +5084,10 @@ window.__ModuleLoader__.load({
               const isPruned = enabled && prunedSet.has(node.id);
               const condDecision = isCondKind ? (decisionsById[node.id] || null) : null;
               const verdictInfo = condDecision ? conditionVerdictSummary(condDecision, lang) : null;
+              const hasOpenPopover = decisionViewFor === node.id
+                || refsEditFor === node.id
+                || roleEditFor === node.id
+                || (typeof roleEditFor === 'string' && roleEditFor.includes(':' + node.id + ':'));
               return h('div', {
                 key: node.id,
                 'data-node': node.id,
@@ -4346,10 +5100,11 @@ window.__ModuleLoader__.load({
                   ...(isLeadKind ? S.leadNode : null),
                   ...(isInactive || isPruned ? S.orphanNode : null),
                   ...(stateStyle || null),
-                  ...(decisionViewFor === node.id ? { zIndex: 40 } : null),
+                  ...(hasOpenPopover ? { zIndex: 40 } : null),
                 },
                 title: isPruned ? t('tipPruned') : (isOrphan ? t('orphanTip') : (isSoloLead ? t('tipSoloLead') : (isDeadEnd ? t('tipDeadEnd') : undefined))),
                 onMouseDown: (e) => onNodeDown(e, node.id),
+                onContextMenu: (e) => onNodeContextMenu(e, node),
               },
                 h('div', {
                   className: (isRunning || isLeadReady) && fxLevel === 'vivid' ? 'dsh-wc-topbar-vivid' : undefined,
@@ -4462,7 +5217,7 @@ window.__ModuleLoader__.load({
                         }, enabled ? glyph : null, label, ' ↗');
                       }
                       if (!enabled) return null;
-                      return h('div', {
+      return h('div', {
                         style: {
                           ...S.statusChip,
                           bottom: (direction === 'tb' && !isCondKind) ? '28px' : '5px',
@@ -4722,6 +5477,8 @@ window.__ModuleLoader__.load({
                     style: { maxHeight: '140px', overflowY: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: C.text, fontSize: '11px' },
                   }, (condDecision.reason && String(condDecision.reason).trim()) || t('verdictNoReason')),
                 ),
+                refsControlBtn(node),
+                refsPopoverEl(node),
                 renderBand(node),
               );
             }),
@@ -4760,7 +5517,7 @@ window.__ModuleLoader__.load({
           try { console.error('[workflow-canvas] apply failed', error); } catch (_e) { /* ignore */ }
         }
       },
-      __test: { topoOrder, wouldCycle, soloLeadNodeIds, layoutGraph, builtinTemplates, deadEndNodeIds, nextEffectLevel, nextMaxParallel, dropdownAlign, zoomAroundPoint, scrubZoom, buildPlan, loadDoc, saveDoc, storageKey, socketCenterY, nodeHeight, conditionBranchesForUI, distanceToEdge, edgeCurve, compatibleTargetsForWire, conditionVerdictSummary, entryRunButtonState, outputSocketX, inputSocketPos, outputSocketPos },
+      __test: { topoOrder, wouldCycle, soloLeadNodeIds, layoutGraph, builtinTemplates, deadEndNodeIds, nextEffectLevel, nextMaxParallel, dropdownAlign, zoomAroundPoint, scrubZoom, buildPlan, loadDoc, saveDoc, storageKey, socketCenterY, nodeHeight, conditionBranchesForUI, distanceToEdge, edgeCurve, compatibleTargetsForWire, conditionVerdictSummary, entryRunButtonState, outputSocketX, inputSocketPos, outputSocketPos, normalizeRefsUI, clampMenuPos, cloneSelection, DEFAULT_SHORTCUTS, normalizeShortcut, formatShortcutFromEvent, matchesShortcut, applyShortcutBinding },
     };
   },
 });

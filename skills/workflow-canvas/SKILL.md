@@ -10,9 +10,10 @@ A canvas is a DAG of agents the user can see and edit.
 ## Node kinds
 
 - **Entry Lead** (`id: "lead"`, blue top bar) — created automatically by `canvas_generate` to hold the overall `task`. **Do not author a separate entry Lead node** — wire first-wave nodes directly from `from: "lead"`. The entry Lead **never** triggers `need-lead` (it does not pause before Wave 1).
-- **Downstream Lead** (`kind: "lead"`, blue top bar) — performed by the conversation itself, never spawned. Any added non-entry Lead node holds a `role` and pauses the run (`status: "need-lead"`) so you can decide, review, or integrate before continuing.
+- **Downstream Lead** (`kind: "lead"`, blue top bar) — performed by the conversation itself, never spawned. Any added non-entry Lead node holds a `role` and pauses the run (`status: "need-lead"`) so you can decide, review, or integrate before continuing. Direct `Lead → Lead` stage chains are supported (zero subagents spawned) as long as each chained Lead has a non-empty `role` describing its main-conversation stage.
 - **Subagent** (`kind: "agent"`, green top bar) — spawned as a child agent with its own model, reasoning effort, capability scope, fallback model and memory switch. Wire every subagent's output into a downstream node or final Lead so nothing becomes a dead end.
 - **Condition** (`kind: "condition"`, amber top bar) — lightweight read-only (`minimal`) branch judge that evaluates upstream outputs (including failure/incomplete flags) against `role`. Defaults to binary `if/else` (`branch: "true"` / `"false"`, returning `{ pass, reason }`); set `branches: ["通过", "小修", "重做"]` (2+ entries) for multi-way `switch/case` routing (`{ branches: [...], reason }`), with optional `multiMatch: true` to run all matching branches in parallel (and returning `[]` skips all downstream branches when none match). Unchosen branches are pruned automatically without spawning (even when a side `session-ref` wire connects an upstream ancestor into a pruned branch), and branches can converge back into a shared downstream node or terminal Lead.
+- **References** (`refs: string[]`) — attach up to 16 reference file paths, URLs, or shared rules to Entry Lead (global `refs`, injected into every subagent) or any individual node (`node.refs`), cleanly replacing boilerplate read-only loader nodes.
 
 ## Which tool to call
 
@@ -27,7 +28,7 @@ Prefer `canvas_patch` for edits: it merges by node id, so renamed, re-roled or r
 
 ## Node fields
 
-`id` (stable handle, never reuse it for a different node), `kind` (`lead`, `agent`, or `condition`), `label` (display name), `role` (what this step must do, or for `condition` nodes the routing rule), `branches` (optional for `condition` nodes: 2–5 branch names for `switch/case`), `provider` / `model`, `reasoning` (an effort id declared by that model), `preset` (`standard` or `minimal`), `keepSession`, `fallbackModel` / `fallbackProvider`.
+`id` (stable handle, never reuse it for a different node), `kind` (`lead`, `agent`, or `condition`), `label` (display name), `role` (what this step must do, or for `condition` nodes the routing rule), `refs` (optional up to 16 reference paths/URLs/rules; also accepted at top level for Entry Lead), `branches` (optional for `condition` nodes: 2–16 branch names for `switch/case`), `provider` / `model`, `reasoning` (an effort id declared by that model), `preset` (`standard` or `minimal`), `keepSession`, `fallbackModel` / `fallbackProvider`.
 
 Fill `role` for every node. A node with an empty role still runs, but it invents its own task and may wander.
 
@@ -52,7 +53,7 @@ Output sockets determine link type; every non-entry node has a single universal 
 
 1. The canvas must be enabled (the pill over the canvas); `canvas_workflow` refuses while it is disabled. While enabled, the host automatically injects a per-session runtime context reminder on each turn.
 2. You may pass `task` to override the entry Lead's task (handy when reusing a preset), `reset: true` to discard a paused run and start from scratch, `retryFailed: true` to reuse succeeded nodes and re-run only failed/empty/unfinished nodes plus their downstream, `fromNodes: [...]` to re-run from specific node ids/labels, `clearMemory: true` to forget saved `keepSession` child sessions, and `maxParallel` (1–8) to adjust concurrency.
-3. Solo chained Lead nodes (zero subagent upstream) and dangling dead-end subagents (zero outgoing edges while an active downstream Lead exists) are rendered dashed on the canvas and skipped at run time. Wiring a Lead + Subagent together into a downstream Lead is valid and active.
+3. Chained Lead nodes with **both** zero subagent upstream **and** an empty `role` — as well as dangling dead-end subagents (zero outgoing edges while an active downstream Lead exists) — are rendered dashed on the canvas and skipped at run time. Chained `Lead → Lead` stages with a non-empty `role` (or Lead + Subagent → Lead) are valid and active.
 4. Subagent capability (`preset: standard | minimal`) narrows the toolset within the main chat's permission ceiling; it cannot elevate past the parent session's sandbox/approval mode.
 3. Subagent nodes run in a dynamic concurrency pool of up to four: as soon as any node finishes, newly unblocked downstream subagents start immediately without waiting for slower siblings.
 4. Intermediate downstream Lead nodes pause the run (`status: "need-lead"`). Complete that Lead step yourself, then call `canvas_workflow` again with `leadResult` to resume downstream nodes — do not spawn an agent for it.

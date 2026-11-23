@@ -38,7 +38,7 @@ There are four node types on the canvas (Entry Lead, Subagent, Lead, Condition):
 |---|---|
 | <img src="docs/images/node-entry-en.png" width="220" alt="Entry Lead node" /> | **Entry Lead (start node, always present)**<br>• The starting point of the graph — **right-side output sockets only**.<br>• Write the overall goal in **Task**, or leave it blank and send your prompt directly in chat once the canvas is **● ON**.<br>• Every node that should run must be reachable from here. |
 | <img src="docs/images/node-subagent-en.png" width="220" alt="Subagent node" /> | **Subagent (green top bar — runs in an isolated child session)**<br>• **Model / Reasoning**: Configure model and reasoning effort per node.<br>• **Scope**: `standard` (all tools) or `minimal` (read-only thinking — disables file edits and web), bounded by the main chat's permission mode.<br>• **Fallback**: Automatically retries once on another model if the primary one fails.<br>• **Memory**: Flip **on** to enable the session dropdown beside it (**Latest** or pin any past run `#1 / #2`; muted when off).<br>• **Role**: Edit inline or click `⤢` to open a larger editor. |
-| <img src="docs/images/node-lead-en.png" width="220" alt="Lead node" /> | **Lead (blue top bar — runs directly in the main conversation)**<br>• **Never spawned** — handled by your main chat itself.<br>• **Mid-flow** (e.g. `Lead Pick`): pauses with `⏸ Ready` once upstream finishes so you can decide before downstream starts.<br>• **End-of-flow** (e.g. `Lead Review`): delivers the final summary in one shot without an extra round-trip.<br>• Requires at least one subagent upstream (solo Lead-to-Lead nodes render dashed and are skipped). |
+| <img src="docs/images/node-lead-en.png" width="220" alt="Lead node" /> | **Lead (blue top bar — runs directly in the main conversation)**<br>• **Never spawned** — handled by your main chat itself.<br>• **Mid-flow** (e.g. `Lead Pick`): pauses with `⏸ Ready` once upstream finishes so you can decide before downstream starts.<br>• **Main-conversation stage chains (`Lead → Lead`)**: chain Lead nodes directly as lightweight human-in-the-loop gates or multi-step guidance with zero subagent spawns — just fill in **Role** (only blank-role solo Lead nodes without subagent upstream render dashed and are skipped).<br>• **End-of-flow** (e.g. `Lead Review`): delivers the final summary in one shot without an extra round-trip. |
 | <img src="docs/images/node-condition-en.png" width="220" alt="Condition node" /> | **Condition (amber top bar — lightweight read-only judge for `if/else`, `switch/case` & parallel multi-match)**<br>• Runs as a dedicated lightweight read-only subagent with **Model / Reasoning / Fallback** controls; both the overall rule and every individual branch have a `⤢` button to open a larger editor.<br>• Starts with inline editable **`Yes` / `No`** branches; click **`+ Case`** to add more named branches freely (e.g. `Pass / Minor Fix / Rewrite / Other`).<br>• Toggle **`Single`** (pick at most 1 best match) vs **`Multi`** (run all matching branches in parallel); if none match or the condition node itself fails, it never guesses a branch — it skips intermediate branches and hands off to the nearest downstream Lead (or halts cleanly for `retryFailed: true`). |
 
 Load a built-in template from **`☰ Presets`**, or press **`Shift+A`** anywhere on the canvas to add a node (`⋯` also provides `⊞ Auto layout` and `✕ Clear canvas`):
@@ -58,8 +58,8 @@ Output socket colour indicates the channel type:
 | Blue | `structured` | Passes a JSON object; the upstream node is automatically asked for structured output |
 | Purple | `session` | Continues inside the upstream child session without reloading context |
 
-- **Disconnect**: Hold **right-click and sweep across any wire** to cut it (or drag a connected left socket away).
-- **Dashed nodes (inactive)**: Unreachable nodes, solo chained Lead nodes with no subagent upstream, and dangling dead-end subagents render **dashed** and are skipped at run time.
+- **Disconnect & right-click menus**: **Right-click any node, edge, or blank canvas** to open a context menu (edit role, manage refs, duplicate/delete, insert a subagent/condition directly onto a wire, add nodes, auto-layout, undo); **right-drag across any wire** still cuts links cleanly without conflict.
+- **Dashed nodes (inactive)**: Unreachable nodes, blank-role solo chained Lead nodes with no subagent upstream, and dangling dead-end subagents render **dashed** and are skipped at run time.
 
 ![Right-drag to cut a link and re-wire](docs/images/connect-and-cut.gif)
 
@@ -84,6 +84,7 @@ Drop a **Condition** node anywhere in the graph to route downstream automaticall
 - Supports default binary **`Yes / No`**, multi-way **`switch/case`** via **`+ Case`** (e.g. `Pass / Minor Fix / Rewrite`), and **`Single / Multi`** match modes.
 - Unchosen branches are pruned automatically without spawning; if zero branches match or the condition node itself fails, it never guesses — it skips intermediate branches and hands off to the nearest downstream Lead.
 - Once judged, a compact verdict pill appears right under the condition card (click to inspect the full verdict reason), while unchosen branch edges and skipped nodes dim automatically.
+- **Per-node & global `+ Refs` list**: Click **`+ Refs`** in the top-right title bar of any node (Entry Lead global refs, downstream Leads, Subagents, or Condition nodes) to attach up to 16 reference file paths, URLs, or constraints — deduplicated and injected into prompts automatically at run time.
 
 ![3-way switch/case conditional routing and automatic branch pruning](docs/images/condition-switch-run.gif)
 
@@ -122,12 +123,13 @@ Active nodes glow blue with animated flow wires and turn green when done. **Clic
 |---|---|
 | `Shift+A` / Drag-wire drop | Add a node at cursor, or drag from an output socket onto blank canvas to create & auto-connect (`1` Subagent, `2` Lead, `3` Condition) |
 | Middle-drag / `Space` + left-drag | Pan the canvas |
-| Wheel / `⊡ Fit` / `100%` pill | Zoom around cursor / fit all nodes / click to reset 100%, drag left-right to scrub zoom |
+| Wheel / bottom-right `⊡` & `100%` pill | Zoom around cursor / fit all nodes / click to reset 100%, drag left-right to scrub zoom |
 | `⇄ Horiz` / `⇅ Vert` | Switch canvas direction and auto-layout (vertical mode uses top-in / bottom-out vertical curves for narrow sidebars; Condition nodes support `Out R / Out L` side toggle) |
-| Marquee drag + `Ctrl+D` / `Delete` | Multi-select move, duplicate (with settings), or batch delete |
-| Right-drag across wires | Cut links (toggle under `⋯`) |
+| Marquee drag + `Shift+D` / `Delete` | Multi-select move, duplicate (with settings & internal links), or batch delete |
+| Right-click node / edge / canvas | Context menu (edit role, manage refs, insert node on wire, add nodes, layout, undo) |
+| Right-drag across wires | Cut links (activates at ≥ 6px drag without conflicting with context menu; toggle under `⋯`) |
 | `Ctrl+Z` / `Esc` | Undo structural edit / close popups |
-| `⋯` menu | Import / Copy JSON, Auto layout, Clear canvas, Visual effects (Minimal / Standard / Vivid) |
+| `⋯` menu | Undo, Fit, Import / Copy JSON, Auto layout, Clear canvas, Visual effects, Max parallel, Language, Shortcuts |
 
 ## Presets, sharing & limits
 

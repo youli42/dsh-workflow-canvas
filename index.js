@@ -138,6 +138,28 @@ function normalizeKind(rawKind) {
   return 'agent';
 }
 
+/**
+ * Normalize a reference list (paths, URLs, or rules attached to a node or entry Lead).
+ * Accepts string arrays or `{ text | path }` objects; capped at 16 unique non-empty items.
+ */
+function normalizeRefs(rawRefs) {
+  if (!Array.isArray(rawRefs) || !rawRefs.length) return null;
+  const out = [];
+  const seen = new Set();
+  for (const raw of rawRefs) {
+    if (out.length >= 16) break;
+    let s = '';
+    if (typeof raw === 'string') s = raw.trim();
+    else if (raw && typeof raw === 'object') {
+      s = String(raw.text !== undefined ? raw.text : (raw.path !== undefined ? raw.path : '')).trim();
+    }
+    if (!s || seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+  }
+  return out.length ? out : null;
+}
+
 function normalizeBranch(rawBranch) {
   if (rawBranch === true) return 'true';
   if (rawBranch === false) return 'false';
@@ -334,6 +356,14 @@ function briefFor(plan, node, results, failedMap, prunedSet) {
     head.push('【下游】' + (downs.length ? downs.join('、') + ' 会使用你的输出。' : '你是终点，结果会直接交付给用户。'));
     head.push('【要求】只完成你这一步；最终回复只输出简洁、可直接被下游或 Lead 消费的交付报告（结论、改动清单、关键接口/路径），不要包含思考独白、过程叙述或对其他并行节点的评价。若因环境或权限受限未能生成预期产物，必须在开头显式标注「【未完全交付】」并列出缺失项，不得把仅写脚本汇报为已完成。');
   }
+  const mergedRefs = [];
+  const seenRefs = new Set();
+  for (const r of (normalizeRefs(plan && plan.refs) || []).concat(normalizeRefs(node && node.refs) || [])) {
+    if (!seenRefs.has(r)) { seenRefs.add(r); mergedRefs.push(r); }
+  }
+  if (mergedRefs.length) {
+    head.push('【参考资料 / 约束】\n' + mergedRefs.map((r) => '- ' + r).join('\n'));
+  }
   let text = head.join('\n') + '\n';
   for (const u of ups) {
     const value = results[u.from.id];
@@ -470,6 +500,7 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
         text: outText,
         reason: result && result.stopReason,
         empty: isEmptyOutput(result),
+        childId: activation && activation.childId ? String(activation.childId) : '',
       };
       if (isCondition) {
         outcome.decision = parseConditionDecision(result, outText, node);
@@ -531,7 +562,7 @@ async function spawnNode(scope, plan, node, results, parent, signal, sid, failed
   if (continueFrom) {
     const continued = await spawnOnce(scope, plan, node, results, parent, signal, undefined, continueFrom, sid, failedMap, prunedSet);
     if (continued.ok) {
-      const out = { ok: true, empty: Boolean(continued.empty), text: continued.text + '\n（已在上游会话中继续）' };
+      const out = { ok: true, empty: Boolean(continued.empty), text: continued.text + '\n（已在上游会话中继续）', childId: continued.childId || continueFrom };
       if (continued.decision) out.decision = continued.decision;
       return out;
     }
@@ -539,25 +570,25 @@ async function spawnNode(scope, plan, node, results, parent, signal, sid, failed
 
   const first = await spawnOnce(scope, plan, node, results, parent, signal, undefined, undefined, sid, failedMap, prunedSet);
   if (first.ok) {
-    const out = { ok: true, empty: Boolean(first.empty), text: first.text };
+    const out = { ok: true, empty: Boolean(first.empty), text: first.text, childId: first.childId || '' };
     if (first.decision) out.decision = first.decision;
     return out;
   }
   if (!node.fallbackModel && !node.fallbackProvider) {
     const reason = first.reason || 'unknown';
-    return { ok: false, empty: false, reason, text: first.text + '\n（失败原因：' + reason + '，未配置备用模型）' };
+    return { ok: false, empty: false, reason, text: first.text + '\n（失败原因：' + reason + '，未配置备用模型）', childId: first.childId || '' };
   }
   const retry = await spawnOnce(scope, plan, node, results, parent, signal, {
     provider: node.fallbackProvider,
     model: node.fallbackModel,
   }, undefined, sid, failedMap, prunedSet);
   if (retry.ok) {
-    const out = { ok: true, empty: Boolean(retry.empty), text: retry.text + '\n（已用备用模型重试成功）' };
+    const out = { ok: true, empty: Boolean(retry.empty), text: retry.text + '\n（已用备用模型重试成功）', childId: retry.childId || '' };
     if (retry.decision) out.decision = retry.decision;
     return out;
   }
   const reason = retry.reason || 'unknown';
-  return { ok: false, empty: false, reason, text: retry.text + '\n（重试仍失败：' + reason + '）' };
+  return { ok: false, empty: false, reason, text: retry.text + '\n（重试仍失败：' + reason + '）', childId: retry.childId || first.childId || '' };
 }
 
 /** Ids reachable from the entry Lead via O(V + E) BFS; every other node is skipped at run time. */
@@ -599,7 +630,8 @@ function inactiveNodeSets(nodes, edges) {
       const src = byId.get(e.from);
       return Boolean(src && src.kind !== 'lead');
     });
-    if (!hasAgentUp) soloLeads.add(n.id);
+    const hasRole = Boolean(String(n.role || '').trim());
+    if (!hasAgentUp && !hasRole) soloLeads.add(n.id);
   }
 
   const deadEnds = new Set();
@@ -652,7 +684,7 @@ function analyzeCanvasWarnings(nodes, edges) {
   }
   const soloList = list.filter((n) => soloLeads.has(n.id));
   if (soloList.length) {
-    warnings.push('以下 Lead 节点仅串联了其他 Lead、未连入子代理，运行时不生效：'
+    warnings.push('以下 Lead 节点未连入子代理且未填写分工（role），运行时不生效：'
       + soloList.map((n) => (n.label || n.id) + '(' + n.id + ')').join('、'));
   }
   const deadList = list.filter((n) => deadEnds.has(n.id));
@@ -713,6 +745,8 @@ function normalizeCanvas(args) {
       x: 0,
       y: 0,
     };
+    const normRefs = normalizeRefs(raw.refs);
+    if (normRefs) nodeObj.refs = normRefs;
     if (nodeObj.kind === 'condition') {
       const customBranches = normalizeBranches(raw.branches);
       if (customBranches) nodeObj.branches = customBranches;
@@ -770,6 +804,8 @@ function normalizeCanvas(args) {
   } else if (!entry.task) {
     entry.task = String(args.task || '') || entry.role;
   }
+  const topRefs = normalizeRefs(args && args.refs);
+  if (topRefs && !entry.refs) entry.refs = topRefs;
 
   // If entry Lead still has no outgoing edges, auto-wire it to all root nodes so
   // a freshly generated canvas is never dead/unreachable on arrival.
@@ -842,6 +878,11 @@ function applyPatch(plan, args) {
         if (patch.multiMatch) existing.multiMatch = true;
         else delete existing.multiMatch;
       }
+      if (patch.refs !== undefined) {
+        const nr = normalizeRefs(patch.refs);
+        if (nr) existing.refs = nr;
+        else delete existing.refs;
+      }
       touched.push(patch.id);
     } else {
       const created = {
@@ -861,6 +902,10 @@ function applyPatch(plan, args) {
       }
       if (created.kind === 'condition' && patch.multiMatch === true) {
         created.multiMatch = true;
+      }
+      if (patch.refs !== undefined) {
+        const nr = normalizeRefs(patch.refs);
+        if (nr) created.refs = nr;
       }
       nodes.push(created);
       byId.set(created.id, created);
@@ -901,10 +946,16 @@ function applyPatch(plan, args) {
   }
   const taskPatched = typeof (args && args.task) === 'string';
   const nextTask = taskPatched ? args.task : String(plan.task || '');
+  const refsPatched = args && args.refs !== undefined;
+  const nextRefs = refsPatched ? normalizeRefs(args.refs) : normalizeRefs(plan.refs);
+  const nextPlan = { ...plan, task: nextTask, nodes: keptNodes, edges };
+  if (nextRefs) nextPlan.refs = nextRefs;
+  else delete nextPlan.refs;
   return {
-    plan: { ...plan, task: nextTask, nodes: keptNodes, edges },
+    plan: nextPlan,
     touched,
     taskPatched,
+    refsPatched,
     removed: Array.from(removed),
     removeEdges: rawRemoveEdges
       .filter((r) => r && typeof r.from === 'string' && typeof r.to === 'string')
@@ -1004,6 +1055,8 @@ function inspectPlan(sid) {
       if (nb) item.branches = nb;
       if (n.multiMatch) item.multiMatch = true;
     }
+    const nr = normalizeRefs(n.refs);
+    if (nr) item.refs = nr;
     return item;
   });
   const edges = Array.isArray(plan.edges) ? plan.edges.map((e) => {
@@ -1016,6 +1069,7 @@ function inspectPlan(sid) {
     if (branch) out.branch = branch;
     return out;
   }) : [];
+  const planRefs = normalizeRefs(plan.refs);
   const out = {
     hasCanvas: true,
     enabled: Boolean(payload.enabled),
@@ -1025,6 +1079,7 @@ function inspectPlan(sid) {
     warnings: analyzeCanvasWarnings(nodes, edges),
     paused: Boolean(sid && runBySession.get(sid) && runBySession.get(sid).waitingLead),
   };
+  if (planRefs) out.refs = planRefs;
   // Never attach `error: undefined`: DSH's lossless JSON validator rejects keys with undefined values.
   if (payload.error) out.error = String(payload.error);
   return out;
@@ -1252,6 +1307,7 @@ async function executePlan(scope, plan, args, exec) {
     if (!sid) return;
     publishRunState(scope, sid, {
       status,
+      done: Array.from(state.done || []),
       decisions: { ...state.decisions },
       pruned: Array.from(state.pruned || []),
       blockedEdges: Array.from(state.blockedEdges || []),
@@ -1639,6 +1695,7 @@ async function executePlan(scope, plan, args, exec) {
     if (!hasDownstreamWork && leadResult === undefined) {
       // Terminal Lead: zero downstream nodes remain, so complete the run directly
       // and hand off final review/delivery to the Lead without a redundant extra turn.
+      state.done.add(leadNode.id);
       snapshotLastRun(false);
       emitRunState('done', null);
       if (sid) runBySession.delete(sid);
@@ -1649,6 +1706,7 @@ async function executePlan(scope, plan, args, exec) {
           label: leadNode.label,
           role: leadNode.role || leadNode.label,
           needs: depsOf(leadNode).map((id) => byId.get(id).label),
+          ...(normalizeRefs(leadNode.refs) ? { refs: normalizeRefs(leadNode.refs) } : {}),
         },
         results: state.results,
         labels: state.labels,
@@ -1676,6 +1734,7 @@ async function executePlan(scope, plan, args, exec) {
           label: leadNode.label,
           role: leadNode.role || leadNode.label,
           needs: depsOf(leadNode).map((id) => byId.get(id).label),
+          ...(normalizeRefs(leadNode.refs) ? { refs: normalizeRefs(leadNode.refs) } : {}),
         },
         results: state.results,
         labels: state.labels,
@@ -1801,6 +1860,7 @@ export function apply(ctx) {
             type: 'object',
             properties: {
               task: { type: 'string', description: 'Overall task written into the auto-created entry Lead node (id="lead").' },
+              refs: { type: 'array', description: 'Optional global reference files, URLs, or rules attached to the entry Lead and injected into all subagents.', items: { type: 'string' } },
               nodes: {
                 type: 'array',
                 description: 'Nodes in any order (do not include an entry Lead — wire from "lead" instead). Give each an id or ref so edges can point at it.',
@@ -1822,6 +1882,11 @@ export function apply(ctx) {
                     keepSession: { type: 'boolean' },
                     fallbackModel: { type: 'string' },
                     fallbackProvider: { type: 'string' },
+                    refs: {
+                      type: 'array',
+                      description: 'Optional reference files, paths, or rules attached to this node and injected into its brief.',
+                      items: { type: 'string' },
+                    },
                     branches: {
                       type: 'array',
                       description: 'Optional (condition nodes only): custom switch/case branch names (strings or { id, label }, 2 or more). Omit for default true/false.',
@@ -1898,13 +1963,17 @@ export function apply(ctx) {
               const canvas = { nodes: result.nodes, edges: result.edges, enabled: nextEnabled };
               const delivered = sid ? publishCanvas(scope, sid, canvas) : false;
               if (sid) {
+                const entryNode = canvas.nodes.find((n) => n && n.id === 'lead');
+                const planObj = {
+                  task: String(result.task || (args && args.task) || ''),
+                  nodes: withoutEntry(canvas.nodes),
+                  edges: canvas.edges,
+                };
+                const entryRefs = normalizeRefs(entryNode && entryNode.refs);
+                if (entryRefs) planObj.refs = entryRefs;
                 canvasBySession.set(sid, {
                   enabled: nextEnabled,
-                  plan: {
-                    task: String(result.task || (args && args.task) || ''),
-                    nodes: withoutEntry(canvas.nodes),
-                    edges: canvas.edges,
-                  },
+                  plan: planObj,
                 });
                 runBySession.delete(sid);
                 lastRunBySession.delete(sid);
@@ -1931,6 +2000,7 @@ export function apply(ctx) {
             type: 'object',
             properties: {
               task: { type: 'string', description: 'Optional: update the overall task in the entry Lead node.' },
+              refs: { type: 'array', description: 'Optional: replace global reference files/rules on the entry Lead node.', items: { type: 'string' } },
               nodes: { type: 'array', description: 'Nodes to update or add. Existing ids are merged field by field.', items: { type: 'object' } },
               removeNodes: { type: 'array', description: 'Node ids to delete.', items: { type: 'string' } },
               edges: { type: 'array', description: 'Links to add.', items: { type: 'object' } },
@@ -1976,6 +2046,7 @@ export function apply(ctx) {
                 removeEdges: patched.removeEdges,
               };
               if (patched.taskPatched) patchDoc.task = nextPlan.task;
+              if (patched.refsPatched) patchDoc.refs = nextPlan.refs || [];
               const delivered = publishCanvas(scope, sid, patchDoc);
               const warnings = analyzeCanvasWarnings(nextPlan.nodes, nextPlan.edges);
               const summary = '已更新 ' + patched.touched.length + ' 个节点'
@@ -2009,6 +2080,7 @@ export function apply(ctx) {
                 hasCanvas: { type: 'boolean' },
                 enabled: { type: 'boolean' },
                 task: { type: 'string' },
+                refs: { type: 'array', items: { type: 'string' } },
                 nodes: { type: 'array' },
                 edges: { type: 'array' },
                 warnings: { type: 'array', items: { type: 'string' } },
@@ -2038,6 +2110,7 @@ export function apply(ctx) {
                     : ''));
                   if (n.multiMatch) flags.push('多选');
                 }
+                if (Array.isArray(n.refs) && n.refs.length) flags.push('参考×' + n.refs.length);
                 if (n.model) flags.push(n.model);
                 if (n.reasoning) flags.push('reasoning=' + n.reasoning);
                 if (n.preset === 'minimal') flags.push('minimal');
@@ -2215,6 +2288,7 @@ export {
   downstreamLabels,
   briefFor,
   normalizeBranches,
+  normalizeRefs,
   parseConditionDecision,
   withoutEntry,
   analyzeCanvasWarnings,

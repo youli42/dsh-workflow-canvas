@@ -712,7 +712,7 @@ test('solo chained Leads and dead-end subagents are warned and skipped cleanly a
     { id: 'a', kind: 'agent', label: 'A', role: 'A' },
     { id: 'dead', kind: 'agent', label: '无出边', role: 'D' },
     { id: 'l1', kind: 'lead', label: 'L1', role: '1' },
-    { id: 'l2', kind: 'lead', label: 'L2', role: '2' },
+    { id: 'l2', kind: 'lead', label: 'L2', role: '' },
   ];
   const edges = [
     { from: 'lead', to: 'a', type: 'prompt' },
@@ -721,7 +721,7 @@ test('solo chained Leads and dead-end subagents are warned and skipped cleanly a
     { from: 'l1', to: 'l2', type: 'prompt' },
   ];
   const warns = analyzeCanvasWarnings(nodes, edges);
-  assert.ok(warns.some((w) => w.includes('仅串联了其他 Lead') && w.includes('L2')));
+  assert.ok(warns.some((w) => w.includes('未连入子代理且未填写分工') && w.includes('L2')));
   assert.ok(warns.some((w) => w.includes('没有出边') && w.includes('无出边')));
 
   const res = await executePlan(
@@ -1462,4 +1462,111 @@ test('executePlan publishes live run-state telemetry (.run.json) with condition 
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('briefFor, normalizeCanvas, and applyPatch inject and preserve global and per-node refs', () => {
+  const gen = normalizeCanvas({
+    task: '代码审查',
+    refs: ['README.md', '  README.md  ', 'docs/api.md'],
+    nodes: [
+      { ref: 'a1', kind: 'agent', label: '审查模块', role: '只读排查', refs: ['src/index.js', 'README.md'] },
+    ],
+    edges: [{ from: 'lead', to: 'a1', type: 'prompt' }],
+  });
+  assert.ok(!gen.error);
+  const entry = gen.nodes.find((n) => n.id === 'lead');
+  assert.deepEqual(entry.refs, ['README.md', 'docs/api.md']);
+  const aNode = gen.nodes.find((n) => n.id !== 'lead');
+  assert.deepEqual(aNode.refs, ['src/index.js', 'README.md']);
+
+  const prompt = briefFor(
+    { task: '代码审查', refs: entry.refs, nodes: withoutEntry(gen.nodes), edges: gen.edges },
+    aNode,
+    {},
+  );
+  assert.ok(prompt.includes('【参考资料 / 约束】'));
+  assert.ok(prompt.includes('- README.md'));
+  assert.ok(prompt.includes('- docs/api.md'));
+  assert.ok(prompt.includes('- src/index.js'));
+  assert.equal(prompt.match(/README\.md/g).length, 1, 'duplicate refs must be deduplicated');
+
+  const patched = applyPatch(
+    { task: '代码审查', refs: entry.refs, nodes: withoutEntry(gen.nodes), edges: gen.edges },
+    {
+      refs: ['docs/new.md'],
+      nodes: [{ id: aNode.id, refs: ['src/client.js'] }],
+    },
+  );
+  assert.equal(patched.refsPatched, true);
+  assert.deepEqual(patched.plan.refs, ['docs/new.md']);
+  assert.deepEqual(patched.plan.nodes[0].refs, ['src/client.js']);
+});
+
+test('Lead -> Lead stage chains execute with zero subagents and pass leadResult downstream', async () => {
+  const spawned = [];
+  const briefs = {};
+  const scope = {
+    subagents: {
+      startActivation(spec) {
+        const id = spec.label.split('#')[1];
+        spawned.push(id);
+        briefs[id] = (spec.prompt && spec.prompt[0] && spec.prompt[0].text) || '';
+        return Promise.resolve({
+          childId: 'kid-' + id,
+          result: Promise.resolve({ output: [{ type: 'text', text: 'done:' + id }], stopReason: 'completed' }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+
+  // Pure Lead -> Lead -> Lead main-conversation stage chain (0 subagents)
+  const stageNodes = [
+    { id: 'lead', kind: 'lead', label: 'Lead' },
+    { id: 'l1', kind: 'lead', label: '方案起草', role: '在主对话起草方案并与用户确认', refs: ['docs/spec.md'] },
+    { id: 'l2', kind: 'lead', label: '最终交付', role: '总结变更并给出发布指令' },
+  ];
+  const stageEdges = [
+    { from: 'lead', to: 'l1', type: 'prompt' },
+    { from: 'l1', to: 'l2', type: 'prompt' },
+  ];
+  assert.deepEqual(analyzeCanvasWarnings(stageNodes, stageEdges), []);
+
+  const plan = { task: '重构配置模块', nodes: withoutEntry(stageNodes), edges: stageEdges };
+  const sid = 's-lead-stages-' + Date.now();
+  const r1 = await executePlan(scope, plan, {}, { agent: { id: sid }, signal: new AbortController().signal });
+  assert.equal(r1.status, 'need-lead');
+  assert.equal(r1.node.label, '方案起草');
+  assert.equal(r1.node.role, '在主对话起草方案并与用户确认');
+  assert.deepEqual(r1.node.refs, ['docs/spec.md']);
+  assert.equal(spawned.length, 0);
+
+  const r2 = await executePlan(scope, plan, { leadResult: '已确认采用方案 B' }, { agent: { id: sid }, signal: new AbortController().signal });
+  assert.equal(r2.status, 'done');
+  assert.equal(r2.finalLead.label, '最终交付');
+  assert.equal(r2.finalLead.role, '总结变更并给出发布指令');
+  assert.equal(r2.results.l1, '已确认采用方案 B');
+  assert.equal(spawned.length, 0, 'pure Lead chain never spawns subagents');
+
+  // Lead -> Lead(stage) -> Subagent passes leadResult into downstream subagent brief
+  const mixNodes = [
+    { id: 'lead', kind: 'lead', label: 'Lead' },
+    { id: 'pre', kind: 'lead', label: '主对话调研', role: '先和用户明确边界' },
+    { id: 'impl', kind: 'agent', label: '实现', role: '按确认的边界写代码' },
+  ];
+  const mixEdges = [
+    { from: 'lead', to: 'pre', type: 'prompt' },
+    { from: 'pre', to: 'impl', type: 'prompt' },
+  ];
+  const mixPlan = { task: '新增主题切换', nodes: withoutEntry(mixNodes), edges: mixEdges };
+  const sid2 = 's-lead-to-agent-' + Date.now();
+  const m1 = await executePlan(scope, mixPlan, {}, { agent: { id: sid2 }, signal: new AbortController().signal });
+  assert.equal(m1.status, 'need-lead');
+  assert.equal(m1.node.label, '主对话调研');
+  assert.equal(spawned.length, 0);
+
+  const m2 = await executePlan(scope, mixPlan, { leadResult: '仅保留深浅双色，不做自定义配色' }, { agent: { id: sid2 }, signal: new AbortController().signal });
+  assert.equal(m2.status, 'done');
+  assert.deepEqual(spawned, ['impl']);
+  assert.ok(briefs.impl.includes('仅保留深浅双色，不做自定义配色'));
 });

@@ -66,15 +66,15 @@ test('wouldCycle blocks cycles and edges pointing into entry Lead', () => {
   assert.equal(client.wouldCycle(nodes, edges, 'a', 'c'), false);
 });
 
-test('soloLeadNodeIds marks solo chained Leads inactive/skipped while allowing Lead + Subagent -> Lead', () => {
+test('soloLeadNodeIds skips blank-role solo chained Leads while keeping role-bearing or subagent-fed Leads active', () => {
   const nodes = [
     { id: 'lead', kind: 'lead', task: 't' },
     { id: 'a1', kind: 'agent', label: 'Agent 1' },
     { id: 'a2', kind: 'agent', label: 'Agent 2' },
     { id: 'l1', kind: 'lead', label: 'Lead 1' },
-    { id: 'l2', kind: 'lead', label: 'Lead 2' },
+    { id: 'l2', kind: 'lead', label: 'Lead 2', role: '' },
   ];
-  // Solo chain l1 -> l2 (no subagent into l2): l2 is inactive/skipped
+  // Solo chain l1 -> l2 with empty role and no subagent into l2: l2 is inactive/skipped
   const soloEdges = [
     { from: 'lead', to: 'a1', type: 'prompt' },
     { from: 'a1', to: 'l1', type: 'prompt' },
@@ -86,7 +86,14 @@ test('soloLeadNodeIds marks solo chained Leads inactive/skipped while allowing L
   assert.ok(builtSolo.plan.skipped.includes('Lead 2'));
   assert.ok(!builtSolo.plan.nodes.some((n) => n.id === 'l2'));
 
-  // Mixed chain l1 -> l2 AND a2 -> l2: l2 has a subagent upstream so it is active
+  // Chained Lead with non-empty role (main-conversation stage) stays active
+  const stageNodes = nodes.map((n) => (n.id === 'l2' ? { ...n, role: '确认发布' } : n));
+  assert.equal(client.soloLeadNodeIds(stageNodes, soloEdges).size, 0);
+  const builtStage = client.buildPlan(stageNodes, soloEdges);
+  assert.ok(!builtStage.error);
+  assert.ok(builtStage.plan.nodes.some((n) => n.id === 'l2'));
+
+  // Mixed chain l1 -> l2 AND a2 -> l2: l2 has a subagent upstream so it is active even without role
   const mixedEdges = [
     { from: 'lead', to: 'a1', type: 'prompt' },
     { from: 'a1', to: 'l1', type: 'prompt' },
@@ -321,12 +328,9 @@ test('dropdownAlign flips to left-anchored when trigger wraps to the left edge o
   assert.equal(client.dropdownAlign({ left: 378, right: 410 }, pane, 204), 'right');
 });
 
-test('compatibleTargetsForWire blocks Lead -> Lead and allows all targets from Subagent/Condition', () => {
+test('compatibleTargetsForWire allows Lead -> Lead stage chains as well as Subagent/Condition targets', () => {
   const fromLead = client.compatibleTargetsForWire({ id: 'lead', kind: 'lead' }, 'prompt');
-  assert.equal(fromLead.agent, true);
-  assert.equal(fromLead.lead, false);
-  assert.equal(fromLead.condition, true);
-  assert.equal(fromLead.leadBlockedReason, 'leadToLeadBlocked');
+  assert.deepEqual({ ...fromLead }, { agent: true, lead: true, condition: true, leadBlockedReason: '' });
 
   const fromAgent = client.compatibleTargetsForWire({ id: 'n1', kind: 'agent' }, 'structured');
   assert.deepEqual({ ...fromAgent }, { agent: true, lead: true, condition: true, leadBlockedReason: '' });
@@ -423,4 +427,83 @@ test('vertical (tb) layout stacks layers top-to-bottom and connects bottom-to-to
   assert.equal(condOutL.x, condL.x, 'tb condition left side exits on left border');
   const curveL = client.edgeCurve(condL, { id: 't', x: condL.x - 100, y: condL.y + 320 }, { type: 'prompt', branch: 'true' }, 'tb');
   assert.ok(curveL.c1x < curveL.x1 && curveL.c2y < curveL.y2, 'tb left-side condition curve exits left then bends downward');
+});
+
+test('buildPlan normalizes and serializes global and per-node refs', () => {
+  const built = client.buildPlan(
+    [
+      { id: 'lead', kind: 'lead', task: '审查代码', refs: ['docs/spec.md', '  ', 'docs/spec.md', 'README.md'] },
+      { id: 'n1', kind: 'agent', label: '审查', role: '只读检查', refs: ['src/shared.js', 'src/shared.js'] },
+    ],
+    [{ from: 'lead', to: 'n1', type: 'prompt' }],
+  );
+  assert.ok(!built.error);
+  assert.deepEqual([...built.plan.refs], ['docs/spec.md', 'README.md']);
+  const planN = built.plan.nodes.find((n) => n.id === 'n1');
+  assert.deepEqual([...planN.refs], ['src/shared.js']);
+});
+
+test('clampMenuPos keeps context menus inside canvas bounds and flips near right/bottom edges', () => {
+  assert.deepEqual({ ...client.clampMenuPos(60, 80, 400, 500, 180, 160) }, { sx: 60, sy: 80 });
+  // Near right & bottom edge -> flips left and up
+  const flipped = client.clampMenuPos(380, 470, 400, 500, 180, 160);
+  assert.equal(flipped.sx, 200);
+  assert.equal(flipped.sy, 310);
+  // Tiny viewport -> clamps to safe 8px inset
+  const tiny = client.clampMenuPos(20, 20, 160, 120, 180, 160);
+  assert.equal(tiny.sx, 8);
+  assert.equal(tiny.sy, 8);
+});
+
+test('cloneSelection duplicates selected nodes together with internal edges (including type & branch)', () => {
+  const nodes = [
+    { id: 'lead', kind: 'lead', task: 't', x: 0, y: 0 },
+    { id: 'a', kind: 'agent', label: 'A', x: 100, y: 100, refs: ['doc.md'] },
+    { id: 'c', kind: 'condition', label: 'C', x: 320, y: 100, branches: [{ id: 'true', label: '是' }, { id: 'false', label: '否' }] },
+    { id: 'b', kind: 'agent', label: 'B', x: 540, y: 100 },
+    { id: 'outside', kind: 'agent', label: 'Out', x: 760, y: 100 },
+  ];
+  const edges = [
+    { id: 'e0', from: 'lead', to: 'a', type: 'prompt' },
+    { id: 'e1', from: 'a', to: 'c', type: 'structured' },
+    { id: 'e2', from: 'c', to: 'b', type: 'prompt', branch: 'true' },
+    { id: 'e3', from: 'b', to: 'outside', type: 'session-ref' },
+  ];
+  const { clones, clonedEdges } = client.cloneSelection(nodes, edges, ['lead', 'a', 'c', 'b'], 't1');
+  assert.equal(clones.length, 3, 'entry Lead is never cloned');
+  assert.equal(clonedEdges.length, 2, 'only internal edges between cloned nodes are copied');
+  const byLabel = new Map(clones.map((n) => [n.label, n]));
+  const eAC = clonedEdges.find((e) => e.from === byLabel.get('A').id && e.to === byLabel.get('C').id);
+  const eCB = clonedEdges.find((e) => e.from === byLabel.get('C').id && e.to === byLabel.get('B').id);
+  assert.ok(eAC && eAC.type === 'structured');
+  assert.ok(eCB && eCB.branch === 'true');
+  // Mutating clone refs/branches does not mutate originals
+  byLabel.get('A').refs.push('extra.md');
+  byLabel.get('C').branches[0].label = '改名';
+  assert.equal(nodes[1].refs.length, 1);
+  assert.equal(nodes[2].branches[0].label, '是');
+});
+
+test('configurable shortcuts default duplicate to Shift+D, match KeyboardEvents, and clear conflicts', () => {
+  assert.equal(client.DEFAULT_SHORTCUTS.duplicate, 'Shift+D');
+  assert.equal(client.DEFAULT_SHORTCUTS.addNode, 'Shift+A');
+  assert.equal(client.DEFAULT_SHORTCUTS.undo, 'Ctrl+Z');
+  assert.equal(client.DEFAULT_SHORTCUTS.delete, 'Delete');
+
+  assert.equal(client.normalizeShortcut('shift+d'), 'Shift+D');
+  assert.equal(client.normalizeShortcut('cmd+shift+z'), 'Ctrl+Shift+Z');
+  assert.equal(client.normalizeShortcut('Escape'), '');
+
+  assert.equal(client.formatShortcutFromEvent({ key: 'Shift', shiftKey: true }), null);
+  assert.equal(client.formatShortcutFromEvent({ key: 'Escape' }), null);
+  assert.equal(client.formatShortcutFromEvent({ key: 'D', code: 'KeyD', shiftKey: true }), 'Shift+D');
+  assert.equal(client.matchesShortcut({ key: 'D', code: 'KeyD', shiftKey: true }, 'Shift+D'), true);
+  assert.equal(client.matchesShortcut({ key: 'd', code: 'KeyD', ctrlKey: true }, 'Shift+D'), false);
+  assert.equal(client.matchesShortcut({ key: 'z', code: 'KeyZ', metaKey: true }, 'Ctrl+Z'), true);
+
+  // Rebinding fitView to Shift+D automatically clears the conflict on duplicate
+  const { next, clearedConflict } = client.applyShortcutBinding(client.DEFAULT_SHORTCUTS, 'fitView', 'shift+d');
+  assert.equal(clearedConflict, true);
+  assert.equal(next.fitView, 'Shift+D');
+  assert.equal(next.duplicate, '');
 });
