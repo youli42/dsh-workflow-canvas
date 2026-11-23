@@ -218,6 +218,12 @@ window.__ModuleLoader__.load({
         runStarted: '已向当前会话发起画布执行',
         runFailed: '发起运行失败',
         runSendUnavailable: '当前宿主不支持从画布直接发起对话，请在聊天框发送消息启动',
+        dirLR: '⇄ 横排',
+        dirTB: '⇅ 竖排',
+        tipDir: '切换画布流向（横排 → / 竖排 ↓），竖排更适合窄侧边栏，切换时自动重排（可 ↶ 撤销）',
+        condSideR: '右出',
+        condSideL: '左出',
+        tipCondSide: '竖排模式下切换分支输出口在左侧或右侧',
         fxLabel: '视觉效果',
         fxMinimal: '极简',
         fxStandard: '标准',
@@ -362,6 +368,12 @@ window.__ModuleLoader__.load({
         runStarted: 'Workflow run queued in this chat',
         runFailed: 'Failed to start run',
         runSendUnavailable: 'Direct canvas launch is unavailable in this host; send a message in chat to start',
+        dirLR: '⇄ Horiz',
+        dirTB: '⇅ Vert',
+        tipDir: 'Switch canvas direction (Horizontal → / Vertical ↓). Vertical fits narrow sidebars better and auto-layouts (undoable).',
+        condSideR: 'Out R',
+        condSideL: 'Out L',
+        tipCondSide: 'Flip condition branch sockets between left and right edges in vertical mode',
         fxLabel: 'Visual effects',
         fxMinimal: 'Minimal',
         fxStandard: 'Standard',
@@ -930,6 +942,37 @@ window.__ModuleLoader__.load({
       return socketCenterY(idx);
     }
 
+    function outputSocketX(fromNode, type, branch) {
+      const b = typeof branch === 'string' ? branch.trim() : '';
+      if (b || (fromNode && fromNode.kind === 'condition')) {
+        const list = conditionBranchesForUI(fromNode);
+        const idx = b ? Math.max(0, list.findIndex((x) => x.id === b)) : 0;
+        return Math.round(((idx + 1) / (list.length + 1)) * NODE_W);
+      }
+      const idx = Math.max(0, SOCKET_TYPES.findIndex((t) => t.id === (type || 'prompt')));
+      return Math.round(((idx + 1) / (SOCKET_TYPES.length + 1)) * NODE_W);
+    }
+
+    function inputSocketPos(node, direction) {
+      if (direction === 'tb') return { x: node.x + NODE_W / 2, y: node.y };
+      return { x: node.x, y: node.y + socketCenterY(0) };
+    }
+
+    function outputSocketPos(fromNode, type, branch, direction) {
+      if (direction === 'tb') {
+        const b = typeof branch === 'string' ? branch.trim() : '';
+        if (b || (fromNode && fromNode.kind === 'condition')) {
+          const onLeft = Boolean(fromNode && fromNode.tbSide === 'left');
+          return {
+            x: onLeft ? fromNode.x : (fromNode.x + NODE_W),
+            y: fromNode.y + outputSocketY(fromNode, type, b),
+          };
+        }
+        return { x: fromNode.x + outputSocketX(fromNode, type, branch), y: fromNode.y + nodeHeight(fromNode) };
+      }
+      return { x: fromNode.x + NODE_W, y: fromNode.y + outputSocketY(fromNode, type, branch) };
+    }
+
     function edgeColorFor(fromNode, edge) {
       const b = edge && typeof edge.branch === 'string' ? edge.branch.trim() : '';
       if (b) {
@@ -983,10 +1026,36 @@ window.__ModuleLoader__.load({
       return doc;
     }
 
-    /** Control points of one link, in canvas coordinates. All inputs converge to the unified left socket (Row 0). */
-    function edgeCurve(from, to, typeOrEdge) {
+    /** Control points of one link, in canvas coordinates. Supports horizontal (lr) and vertical (tb) flow. */
+    function edgeCurve(from, to, typeOrEdge, direction) {
       const type = (typeOrEdge && typeof typeOrEdge === 'object') ? (typeOrEdge.type || 'prompt') : (typeOrEdge || 'prompt');
       const branch = (typeOrEdge && typeof typeOrEdge === 'object') ? (typeOrEdge.branch || '') : '';
+      if (direction === 'tb') {
+        const isCondOut = Boolean(branch || (from && from.kind === 'condition'));
+        if (isCondOut) {
+          const onLeft = Boolean(from && from.tbSide === 'left');
+          const x1 = from.x + WORLD_PAD + (onLeft ? 0 : NODE_W);
+          const y1 = from.y + WORLD_PAD + outputSocketY(from, type, branch);
+          const x2 = to.x + WORLD_PAD + NODE_W / 2;
+          const y2 = to.y + WORLD_PAD;
+          const outSpan = Math.max(46, Math.abs(x2 - x1) * 0.35);
+          const dy = Math.max(46, Math.abs(y2 - y1) * 0.45);
+          return {
+            x1, y1,
+            c1x: onLeft ? (x1 - outSpan) : (x1 + outSpan),
+            c1y: y1,
+            c2x: x2,
+            c2y: y2 - dy,
+            x2, y2,
+          };
+        }
+        const x1 = from.x + WORLD_PAD + outputSocketX(from, type, branch);
+        const y1 = from.y + WORLD_PAD + nodeHeight(from);
+        const x2 = to.x + WORLD_PAD + NODE_W / 2;
+        const y2 = to.y + WORLD_PAD;
+        const dy = Math.max(40, Math.abs(y2 - y1) * 0.5);
+        return { x1, y1, c1x: x1, c1y: y1 + dy, c2x: x2, c2y: y2 - dy, x2, y2 };
+      }
       const x1 = from.x + WORLD_PAD + NODE_W;
       const y1 = from.y + WORLD_PAD + outputSocketY(from, type, branch);
       const x2 = to.x + WORLD_PAD;
@@ -995,14 +1064,14 @@ window.__ModuleLoader__.load({
       return { x1, y1, c1x: x1 + dx, c1y: y1, c2x: x2 - dx, c2y: y2, x2, y2 };
     }
 
-    function edgePath(from, to, typeOrEdge) {
-      const c = edgeCurve(from, to, typeOrEdge);
+    function edgePath(from, to, typeOrEdge, direction) {
+      const c = edgeCurve(from, to, typeOrEdge, direction);
       return 'M ' + c.x1 + ' ' + c.y1 + ' C ' + c.c1x + ' ' + c.c1y + ', ' + c.c2x + ' ' + c.c2y + ', ' + c.x2 + ' ' + c.y2;
     }
 
     /** Shortest distance between a point and one link, sampled along the curve. */
-    function distanceToEdge(point, from, to, typeOrEdge) {
-      const c = edgeCurve(from, to, typeOrEdge);
+    function distanceToEdge(point, from, to, typeOrEdge, direction) {
+      const c = edgeCurve(from, to, typeOrEdge, direction);
       let best = Infinity;
       let prevX = c.x1;
       let prevY = c.y1;
@@ -1150,7 +1219,7 @@ window.__ModuleLoader__.load({
     }
 
     /** Tidy a DAG into symmetrical left-to-right columns by longest-path depth. */
-    function layoutGraph(nodes, edges) {
+    function layoutGraph(nodes, edges, direction) {
       const list = Array.isArray(nodes) ? nodes : [];
       const linkList = Array.isArray(edges) ? edges : [];
       if (!list.length) return [];
@@ -1176,16 +1245,35 @@ window.__ModuleLoader__.load({
         columns.get(col).push(n);
       }
       const posById = new Map();
-      const COL_PITCH = 300;
-      const ROW_PITCH = 262;
-      const MID_Y = 320;
-      for (const [col, colNodes] of columns.entries()) {
-        const ordered = colNodes.slice().sort((a, b) => (a.y || 0) - (b.y || 0));
-        const totalH = (ordered.length - 1) * ROW_PITCH + NODE_H;
-        const startY = Math.round(MID_Y - totalH / 2);
-        ordered.forEach((n, row) => {
-          posById.set(n.id, { x: 40 + col * COL_PITCH, y: startY + row * ROW_PITCH });
-        });
+      if (direction === 'tb') {
+        const COL_PITCH = 292;
+        const ROW_GAP = 68;
+        const MID_X = 340;
+        const layers = Array.from(columns.keys()).sort((a, b) => a - b);
+        let cursorY = 40;
+        for (const layer of layers) {
+          const layerNodes = columns.get(layer).slice().sort((a, b) => (a.x || 0) - (b.x || 0));
+          const totalW = (layerNodes.length - 1) * COL_PITCH + NODE_W;
+          const startX = Math.round(MID_X - totalW / 2);
+          let maxH = NODE_H;
+          layerNodes.forEach((n, idx) => {
+            posById.set(n.id, { x: startX + idx * COL_PITCH, y: cursorY });
+            maxH = Math.max(maxH, nodeHeight(n));
+          });
+          cursorY += maxH + ROW_GAP;
+        }
+      } else {
+        const COL_PITCH = 300;
+        const ROW_PITCH = 262;
+        const MID_Y = 320;
+        for (const [col, colNodes] of columns.entries()) {
+          const ordered = colNodes.slice().sort((a, b) => (a.y || 0) - (b.y || 0));
+          const totalH = (ordered.length - 1) * ROW_PITCH + NODE_H;
+          const startY = Math.round(MID_Y - totalH / 2);
+          ordered.forEach((n, row) => {
+            posById.set(n.id, { x: 40 + col * COL_PITCH, y: startY + row * ROW_PITCH });
+          });
+        }
       }
       return list.map((n) => {
         const p = posById.get(n.id);
@@ -1194,7 +1282,7 @@ window.__ModuleLoader__.load({
     }
 
     /** Starter templates shipped with the plugin so new users can try one click away. */
-    function builtinTemplates(lang) {
+    function builtinTemplates(lang, direction) {
       const en = lang === 'en';
       const sweNodes = [
         {
@@ -1387,25 +1475,25 @@ window.__ModuleLoader__.load({
         {
           id: 'tpl-swe',
           name: en ? 'SWE Delivery: Scan → Sign-Off → Build → Review' : '软件工程：摸底 → 拍板 → 并行实现 → 独立审查',
-          nodes: layoutGraph(sweNodes, sweEdges),
+          nodes: layoutGraph(sweNodes, sweEdges, direction),
           edges: sweEdges,
         },
         {
           id: 'tpl-prd',
           name: en ? 'PRD Research → Decide → Build → Review' : 'PRD 调研 → 拍板 → 并行产出 → 终审',
-          nodes: layoutGraph(prdNodes, prdEdges),
+          nodes: layoutGraph(prdNodes, prdEdges, direction),
           edges: prdEdges,
         },
         {
           id: 'tpl-ab',
           name: en ? 'Parallel Options → Decide → Execute → Review' : '并行方案对比 → 拍板 → 执行 → 验收',
-          nodes: layoutGraph(abNodes, abEdges),
+          nodes: layoutGraph(abNodes, abEdges, direction),
           edges: abEdges,
         },
         {
           id: 'tpl-cond',
           name: en ? 'Conditional: Run → Pass/Fail Branch → Review' : '条件分支：执行 → 判断分流 → 终审',
-          nodes: layoutGraph(condNodes, condEdges),
+          nodes: layoutGraph(condNodes, condEdges, direction),
           edges: condEdges,
         },
       ];
@@ -1694,6 +1782,9 @@ window.__ModuleLoader__.load({
       const [modelsLoading, setModelsLoading] = useState(() => cachedModels.length === 0);
       const [openModelFor, setOpenModelFor] = useState(null);
       const [enabled, setEnabled] = useState(() => Boolean(initial && initial.enabled));
+      const [direction, setDirection] = useState(() => (initial && initial.direction === 'tb' ? 'tb' : 'lr'));
+      const directionRef = useRef(direction);
+      directionRef.current = direction;
 
       const rootElRef = useRef(null);
       const canvasWrapRef = useRef(null);
@@ -1747,8 +1838,8 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         const stamp = applyStamp.current;
         applyStamp.current = null;
-        saveDoc(sessionId, { nodes, edges, enabled }, stamp === null ? undefined : stamp);
-      }, [sessionId, nodes, edges, enabled]);
+        saveDoc(sessionId, { nodes, edges, enabled, direction }, stamp === null ? undefined : stamp);
+      }, [sessionId, nodes, edges, enabled, direction]);
 
       // Plan signature excludes visual (x, y) coordinates so dragging nodes does
       // not trigger false "unsaved changes" warnings; `skipDirtyOnce` suppresses
@@ -2307,10 +2398,10 @@ window.__ModuleLoader__.load({
           const i = ns.length;
           const center = viewportCenterWorld();
           const x = atWorld && typeof atWorld.x === 'number'
-            ? (linkFrom ? Math.round(atWorld.x) : Math.round(atWorld.x - NODE_W / 2))
+            ? (linkFrom ? (directionRef.current === 'tb' ? Math.round(atWorld.x - NODE_W / 2) : Math.round(atWorld.x)) : Math.round(atWorld.x - NODE_W / 2))
             : center.x + 40 + (ns.length % 3) * 30;
           const y = atWorld && typeof atWorld.y === 'number'
-            ? (linkFrom ? Math.round(atWorld.y - socketCenterY(0)) : Math.round(atWorld.y - NODE_H / 2))
+            ? (linkFrom ? (directionRef.current === 'tb' ? Math.round(atWorld.y) : Math.round(atWorld.y - socketCenterY(0))) : Math.round(atWorld.y - NODE_H / 2))
             : center.y - NODE_H / 2 + (ns.length % 3) * 40;
           const defaultLabel = normKind === 'lead'
             ? 'Lead 步骤 ' + i
@@ -2409,15 +2500,29 @@ window.__ModuleLoader__.load({
         flash(t('duplicatedNodes') + ' ×' + clones.length);
       };
 
-      const autoLayout = () => {
+      const autoLayout = (overrideDir) => {
         const curNodes = nodesRef.current;
         const curEdges = edgesRef.current;
         if (!curNodes.length) return;
+        const dir = overrideDir || directionRef.current;
         pushSnapshot();
-        const next = layoutGraph(curNodes, curEdges);
+        const next = layoutGraph(curNodes, curEdges, dir);
         setNodes(next);
         setTimeout(() => fitView(next), 0);
         flash(t('layoutDone'));
+      };
+
+      const toggleDirection = () => {
+        const nextDir = directionRef.current === 'tb' ? 'lr' : 'tb';
+        setDirection(nextDir);
+        const curNodes = nodesRef.current;
+        const curEdges = edgesRef.current;
+        if (curNodes.length) {
+          pushSnapshot();
+          const next = layoutGraph(curNodes, curEdges, nextDir);
+          setNodes(next);
+          setTimeout(() => fitView(next), 0);
+        }
       };
 
       const clearCanvas = () => {
@@ -2560,8 +2665,9 @@ window.__ModuleLoader__.load({
         const node = nodes.find((n) => n.id === id);
         if (!node) return;
         const b = typeof branch === 'string' ? branch.trim() : '';
-        const sx = node.x + NODE_W;
-        const sy = node.y + outputSocketY(node, type, b);
+        const pos = outputSocketPos(node, type, b, directionRef.current);
+        const sx = pos.x;
+        const sy = pos.y;
         const color = edgeColorFor(node, { type, branch: b });
         setPending({ dir: 'out', fromId: id, type, branch: b, color, sx, sy, x: sx, y: sy });
         setDragging(true);
@@ -2604,8 +2710,9 @@ window.__ModuleLoader__.load({
         if (!link) {
           const node = nodes.find((n) => n.id === id);
           if (!node) return;
-          const sx = node.x;
-          const sy = node.y + socketCenterY(0);
+          const pos = inputSocketPos(node, directionRef.current);
+          const sx = pos.x;
+          const sy = pos.y;
           setPending({ dir: 'in', toId: id, type: 'prompt', branch: '', color: '#8a8f98', sx, sy, x: sx, y: sy });
           setDragging(true);
           return;
@@ -2616,8 +2723,9 @@ window.__ModuleLoader__.load({
         if (!from) return;
         const b = typeof link.branch === 'string' ? link.branch.trim() : '';
         const linkType = link.type || 'prompt';
-        const sx = from.x + NODE_W;
-        const sy = from.y + outputSocketY(from, linkType, b);
+        const pos = outputSocketPos(from, linkType, b, directionRef.current);
+        const sx = pos.x;
+        const sy = pos.y;
         const color = edgeColorFor(from, link);
         setPending({ dir: 'out', fromId: link.from, type: linkType, branch: b, color, sx, sy, x: sx, y: sy });
         setDragging(true);
@@ -2884,7 +2992,7 @@ window.__ModuleLoader__.load({
               const source = nodeMap.get(edge.from);
               const target = nodeMap.get(edge.to);
               if (!source || !target) continue;
-              if (distanceToEdge(canvasSpot, source, target, edge) <= threshold) {
+              if (distanceToEdge(canvasSpot, source, target, edge, directionRef.current) <= threshold) {
                 cutHits.current.add(edge.id);
               }
             }
@@ -3541,7 +3649,7 @@ window.__ModuleLoader__.load({
         const to = nodeById.get(edge.to);
         if (!from || !to) return null;
         const color = edgeColorFor(from, edge);
-        const d = edgePath(from, to, edge);
+        const d = edgePath(from, to, edge, direction);
         const highlighted = cutVictims.includes(edge.id);
         const isPrunedEdge = !highlighted && (blockedEdgeSet.has(edgeKeyForState(edge)) || prunedSet.has(edge.from) || prunedSet.has(edge.to));
         const hasSel = selectedSet.size > 0;
@@ -3631,14 +3739,16 @@ window.__ModuleLoader__.load({
 
       const renderBand = (node) => {
         const isEntry = node.id === 'lead';
+        const isTB = direction === 'tb';
         const inColor = inColorByNode.get(node.id) || null;
         const inCount = inCountByNode.get(node.id) || 0;
         const inText = inCount > 1 ? 'in ×' + inCount : 'in';
+        const bandH = nodeHeight(node) - SOCKET_BAND_TOP;
         const unifiedInSocket = !isEntry && h('div', {
           style: {
             ...S.socket,
-            top: (ROW_H - PORT) / 2,
-            left: -PORT / 2,
+            top: isTB ? (-SOCKET_BAND_TOP - PORT / 2) : ((ROW_H - PORT) / 2),
+            left: isTB ? (NODE_W / 2 - PORT / 2) : (-PORT / 2),
             borderColor: inColor || C.border,
             background: inColor || C.elevated,
             boxShadow: inColor
@@ -3653,9 +3763,10 @@ window.__ModuleLoader__.load({
           const branches = conditionBranchesForUI(node, lang);
           const condDec = decisionsById[node.id] || null;
           const matchedBranchIds = condDec && Array.isArray(condDec.branches) ? new Set(condDec.branches) : null;
+          const onLeft = isTB && node.tbSide === 'left';
           return h('div', { style: S.band },
             unifiedInSocket,
-            h('span', { style: { ...S.rowLabel, position: 'absolute', left: '12px', top: '3px', pointerEvents: 'none' } }, inText),
+            !isTB && h('span', { style: { ...S.rowLabel, position: 'absolute', left: '12px', top: '3px', pointerEvents: 'none' } }, inText),
             branches.map((b) => {
               const outLinked = connectedOut.has(node.id + '|branch:' + b.id);
               const isMatchedBranch = Boolean(matchedBranchIds && matchedBranchIds.has(b.id));
@@ -3664,14 +3775,27 @@ window.__ModuleLoader__.load({
                 ? (b.id === 'true' ? t('tipCondTrue') : t('tipCondFalse'))
                 : t('tipBranchOut');
               const editKey = 'branch:' + node.id + ':' + b.id;
-              return h('div', { key: b.id, style: { ...S.condBranchRow, opacity: isUnmatchedBranch ? 0.48 : 1 } },
+              return h('div', {
+                key: b.id,
+                style: {
+                  ...S.condBranchRow,
+                  justifyContent: onLeft ? 'flex-start' : 'flex-end',
+                  opacity: isUnmatchedBranch ? 0.48 : 1,
+                },
+              },
                 h('div', {
-                  style: { display: 'flex', alignItems: 'center', marginRight: '10px' },
+                  style: {
+                    display: 'flex',
+                    alignItems: 'center',
+                    marginLeft: onLeft ? '10px' : 0,
+                    marginRight: onLeft ? 0 : '10px',
+                    flexDirection: onLeft ? 'row-reverse' : 'row',
+                  },
                   onMouseDown: (e) => e.stopPropagation(),
                 },
                   h('button', {
                     type: 'button',
-                    style: S.condBranchExpand,
+                    style: { ...S.condBranchExpand, marginRight: onLeft ? 0 : '2px', marginLeft: onLeft ? '2px' : 0 },
                     title: t('tipExpandBranch'),
                     onMouseEnter: (e) => { e.currentTarget.style.color = C.text; e.currentTarget.style.borderColor = b.color; },
                     onMouseLeave: (e) => { e.currentTarget.style.color = C.dim; e.currentTarget.style.borderColor = C.border; },
@@ -3680,8 +3804,9 @@ window.__ModuleLoader__.load({
                   h('input', {
                     style: {
                       ...S.condBranchInput,
-                      borderRight: '2px solid ' + b.color,
+                      textAlign: onLeft ? 'left' : 'right',
                       borderColor: isMatchedBranch ? b.color : C.border,
+                      ...(onLeft ? { borderLeft: '2px solid ' + b.color } : { borderRight: '2px solid ' + b.color }),
                     },
                     value: b.label,
                     placeholder: t('branchPh'),
@@ -3691,7 +3816,7 @@ window.__ModuleLoader__.load({
                   branches.length > 2
                     ? h('button', {
                         type: 'button',
-                        style: S.condBranchDel,
+                        style: { ...S.condBranchDel, marginLeft: onLeft ? 0 : '2px', marginRight: onLeft ? '2px' : 0 },
                         title: t('delBranchTip'),
                         onMouseEnter: (e) => { e.currentTarget.style.color = '#e5534b'; },
                         onMouseLeave: (e) => { e.currentTarget.style.color = C.dim; },
@@ -3721,7 +3846,7 @@ window.__ModuleLoader__.load({
                   style: {
                     ...S.socket,
                     top: (COND_ROW_H - PORT) / 2,
-                    right: -PORT / 2,
+                    ...(onLeft ? { left: -PORT / 2 } : { right: -PORT / 2 }),
                     borderColor: b.color,
                     background: outLinked ? b.color : C.elevated,
                     boxShadow: outLinked
@@ -3731,6 +3856,43 @@ window.__ModuleLoader__.load({
                   title: outTip,
                   onMouseDown: (e) => onOutputDown(e, node.id, 'prompt', b.id),
                   onMouseUp: (e) => onOutputUp(e, node.id, 'prompt', b.id),
+                }),
+              );
+            }),
+          );
+        }
+        if (isTB) {
+          return h('div', { style: S.band },
+            unifiedInSocket,
+            SOCKET_TYPES.map((sock) => {
+              const outLinked = connectedOut.has(node.id + '|' + sock.id);
+              const sx = outputSocketX(node, sock.id);
+              return h(React.Fragment, { key: sock.id },
+                h('span', {
+                  style: {
+                    ...S.rowLabel,
+                    position: 'absolute',
+                    left: sx + 'px',
+                    top: (bandH - 23) + 'px',
+                    transform: 'translateX(-50%)',
+                    pointerEvents: 'none',
+                    whiteSpace: 'nowrap',
+                  },
+                }, sock.label),
+                h('div', {
+                  style: {
+                    ...S.socket,
+                    top: bandH - PORT / 2,
+                    left: sx - PORT / 2,
+                    borderColor: sock.color,
+                    background: outLinked ? sock.color : C.elevated,
+                    boxShadow: outLinked
+                      ? (fxLevel === 'vivid' ? '0 0 6px ' + sock.color : '0 0 0 2px ' + C.elevated)
+                      : '0 0 0 3px transparent',
+                  },
+                  title: t('tipSocketIn'),
+                  onMouseDown: (e) => onOutputDown(e, node.id, sock.id),
+                  onMouseUp: (e) => onOutputUp(e, node.id, sock.id),
                 }),
               );
             }),
@@ -3809,6 +3971,12 @@ window.__ModuleLoader__.load({
             type: 'button',
             title: t('tipResetZoom'),
           }, Math.round(view.k * 100) + '%'),
+          h('button', {
+            style: direction === 'tb' ? S.btnDirty : S.btn,
+            onClick: toggleDirection,
+            type: 'button',
+            title: t('tipDir'),
+          }, direction === 'tb' ? t('dirTB') : t('dirLR')),
           syncNote ? h('span', { style: S.syncNote, title: syncNote }, syncNote) : null,
           h('span', { style: S.toolSep }),
           h('button', {
@@ -3946,7 +4114,7 @@ window.__ModuleLoader__.load({
             })(),
             presetOpen === 'menu' && (() => {
               const names = Object.keys(presets);
-              const templates = builtinTemplates(lang);
+              const templates = builtinTemplates(lang, direction);
               return h('div', {
                 style: {
                   ...S.presetMenu,
@@ -4220,6 +4388,7 @@ window.__ModuleLoader__.load({
                         disabled: btn.disabled,
                         style: {
                           ...S.statusBtn,
+                          bottom: direction === 'tb' ? '28px' : '4px',
                           color,
                           background: bg,
                           borderColor,
@@ -4284,7 +4453,7 @@ window.__ModuleLoader__.load({
                         const bg = enabled && statusTint !== 'transparent' ? statusTint : C.elevated;
                         return h('button', {
                           type: 'button',
-                          style: { ...S.statusBtn, color, background: bg, borderColor: color === C.dim ? C.border : color },
+                          style: { ...S.statusBtn, bottom: (direction === 'tb' && !isCondKind) ? '28px' : '4px', color, background: bg, borderColor: color === C.dim ? C.border : color },
                           title: t('tipOpenRun'),
                           onMouseDown: (e) => e.stopPropagation(),
                           onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
@@ -4296,6 +4465,7 @@ window.__ModuleLoader__.load({
                       return h('div', {
                         style: {
                           ...S.statusChip,
+                          bottom: (direction === 'tb' && !isCondKind) ? '28px' : '5px',
                           color: statusColor,
                           background: statusTint,
                           border: statusTint !== 'transparent' ? ('1px solid ' + statusColor) : 'none',
@@ -4395,6 +4565,13 @@ window.__ModuleLoader__.load({
                         h('div', { style: S.condLabelRow },
                           h('span', { style: S.fieldLabel }, t('condLabel')),
                           h('div', { style: S.condBtnGroup },
+                            direction === 'tb' && h('button', {
+                              type: 'button',
+                              style: S.condAddBtn,
+                              title: t('tipCondSide'),
+                              onMouseDown: (e) => e.stopPropagation(),
+                              onClick: () => updateNode(node.id, { tbSide: node.tbSide === 'left' ? 'right' : 'left' }),
+                            }, node.tbSide === 'left' ? t('condSideL') : t('condSideR')),
                             h('button', {
                               type: 'button',
                               style: node.multiMatch ? S.condModeBtnOn : S.condAddBtn,
@@ -4583,7 +4760,7 @@ window.__ModuleLoader__.load({
           try { console.error('[workflow-canvas] apply failed', error); } catch (_e) { /* ignore */ }
         }
       },
-      __test: { topoOrder, wouldCycle, soloLeadNodeIds, layoutGraph, builtinTemplates, deadEndNodeIds, nextEffectLevel, nextMaxParallel, dropdownAlign, zoomAroundPoint, scrubZoom, buildPlan, loadDoc, saveDoc, storageKey, socketCenterY, nodeHeight, conditionBranchesForUI, distanceToEdge, edgeCurve, compatibleTargetsForWire, conditionVerdictSummary, entryRunButtonState },
+      __test: { topoOrder, wouldCycle, soloLeadNodeIds, layoutGraph, builtinTemplates, deadEndNodeIds, nextEffectLevel, nextMaxParallel, dropdownAlign, zoomAroundPoint, scrubZoom, buildPlan, loadDoc, saveDoc, storageKey, socketCenterY, nodeHeight, conditionBranchesForUI, distanceToEdge, edgeCurve, compatibleTargetsForWire, conditionVerdictSummary, entryRunButtonState, outputSocketX, inputSocketPos, outputSocketPos },
     };
   },
 });

@@ -384,3 +384,43 @@ test('popup surfaces do not hardcode dark hex fallbacks and explicitly inherit t
   assert.match(src, /menu:\s*\{[^}]*background:\s*C\.elevated,\s*color:\s*C\.text/s, 'dropdown menu sets explicit foreground color');
   assert.match(src, /menuRow:\s*\{[^}]*color:\s*C\.text/s, 'dropdown menu rows set explicit foreground color');
 });
+
+test('vertical (tb) layout stacks layers top-to-bottom and connects bottom-to-top curves', () => {
+  const nodes = [
+    { id: 'lead', kind: 'lead', x: 0, y: 0 },
+    { id: 'a', kind: 'agent', x: 0, y: 0 },
+    { id: 'b', kind: 'agent', x: 100, y: 0 },
+    { id: 'c', kind: 'condition', x: 0, y: 0 },
+  ];
+  const edges = [
+    { from: 'lead', to: 'a', type: 'prompt' },
+    { from: 'lead', to: 'b', type: 'prompt' },
+    { from: 'a', to: 'c', type: 'prompt' },
+    { from: 'b', to: 'c', type: 'prompt' },
+  ];
+  const laid = client.layoutGraph(nodes, edges, 'tb');
+  const byId = new Map(laid.map((n) => [n.id, n]));
+  assert.ok(byId.get('lead').y < byId.get('a').y, 'layer 1 sits below entry Lead');
+  assert.equal(byId.get('a').y, byId.get('b').y, 'parallel siblings share the same vertical layer');
+  assert.ok(byId.get('a').x < byId.get('b').x, 'parallel siblings spread horizontally without overlap');
+  assert.ok(byId.get('c').y > byId.get('a').y + 230, 'layer 2 clears layer 1 node height');
+
+  const curve = client.edgeCurve(byId.get('lead'), byId.get('a'), { type: 'prompt' }, 'tb');
+  assert.equal(curve.c1x, curve.x1, 'vertical curve exits straight downward');
+  assert.equal(curve.c2x, curve.x2, 'vertical curve enters straight from above');
+  assert.ok(curve.c1y > curve.y1 && curve.c2y < curve.y2, 'vertical control points bend along Y axis');
+
+  const inPos = client.inputSocketPos(byId.get('a'), 'tb');
+  assert.equal(inPos.y, byId.get('a').y, 'tb input socket sits on top border');
+  const outPos = client.outputSocketPos(byId.get('lead'), 'prompt', '', 'tb');
+  assert.equal(outPos.y, byId.get('lead').y + client.nodeHeight(byId.get('lead')), 'tb output socket sits on bottom border');
+
+  const condR = { ...byId.get('c'), tbSide: 'right' };
+  const condL = { ...byId.get('c'), tbSide: 'left' };
+  const condOutR = client.outputSocketPos(condR, 'prompt', 'true', 'tb');
+  const condOutL = client.outputSocketPos(condL, 'prompt', 'true', 'tb');
+  assert.equal(condOutR.x, condR.x + 216, 'tb condition right side exits on right border');
+  assert.equal(condOutL.x, condL.x, 'tb condition left side exits on left border');
+  const curveL = client.edgeCurve(condL, { id: 't', x: condL.x - 100, y: condL.y + 320 }, { type: 'prompt', branch: 'true' }, 'tb');
+  assert.ok(curveL.c1x < curveL.x1 && curveL.c2y < curveL.y2, 'tb left-side condition curve exits left then bends downward');
+});

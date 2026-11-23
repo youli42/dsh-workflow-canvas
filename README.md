@@ -123,6 +123,7 @@ Active nodes glow blue with animated flow wires and turn green when done. **Clic
 | `Shift+A` / Drag-wire drop | Add a node at cursor, or drag from an output socket onto blank canvas to create & auto-connect (`1` Subagent, `2` Lead, `3` Condition) |
 | Middle-drag / `Space` + left-drag | Pan the canvas |
 | Wheel / `⊡ Fit` / `100%` pill | Zoom around cursor / fit all nodes / click to reset 100%, drag left-right to scrub zoom |
+| `⇄ Horiz` / `⇅ Vert` | Switch canvas direction and auto-layout (vertical mode uses top-in / bottom-out vertical curves for narrow sidebars; Condition nodes support `Out R / Out L` side toggle) |
 | Marquee drag + `Ctrl+D` / `Delete` | Multi-select move, duplicate (with settings), or batch delete |
 | Right-drag across wires | Cut links (toggle under `⋯`) |
 | `Ctrl+Z` / `Esc` | Undo structural edit / close popups |
