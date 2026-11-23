@@ -24,6 +24,24 @@
     "README.zh.md"
   ],
   "license": "MIT",
+  "author": "Wasabi2575",
+  "homepage": "https://github.com/Wasabi2575/dsh-workflow-canvas#readme",
+  "bugs": {
+    "url": "https://github.com/Wasabi2575/dsh-workflow-canvas/issues"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "dsh-plugin",
+    "deepseek",
+    "workflow",
+    "multi-agent",
+    "subagent",
+    "canvas",
+    "node-graph",
+    "ai-agents",
+    "agent-orchestration"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Wasabi2575/dsh-workflow-canvas.git"

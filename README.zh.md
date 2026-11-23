@@ -1,6 +1,7 @@
 # DSH Workflow Canvas（可视化工作流画布）
 
 [![npm version](https://img.shields.io/npm/v/dsh-workflow-canvas)](https://www.npmjs.com/package/dsh-workflow-canvas)
+[![CI](https://github.com/Wasabi2575/dsh-workflow-canvas/actions/workflows/test.yml/badge.svg)](https://github.com/Wasabi2575/dsh-workflow-canvas/actions/workflows/test.yml)
 [![DSH](https://img.shields.io/badge/DSH-%3E%3D0.2.2-2f81f7)](https://github.com/Wasabi2575/dsh-workflow-canvas)
 [![License: MIT](https://img.shields.io/badge/License-MIT-3fb950.svg)](LICENSE)
 

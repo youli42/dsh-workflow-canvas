@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 社区讨论与工作流预设分享 / Discussions & Workflow Presets
+    url: https://github.com/Wasabi2575/dsh-workflow-canvas/discussions
+    about: 交流编排思路、分享好用的画布 JSON 预设 / Ask questions or share your workflow JSON presets
