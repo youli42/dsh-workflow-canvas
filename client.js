@@ -3972,7 +3972,7 @@ window.__ModuleLoader__.load({
             title: t('tipResetZoom'),
           }, Math.round(view.k * 100) + '%'),
           h('button', {
-            style: direction === 'tb' ? S.btnDirty : S.btn,
+            style: S.btn,
             onClick: toggleDirection,
             type: 'button',
             title: t('tipDir'),
