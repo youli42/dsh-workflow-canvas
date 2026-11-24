@@ -17,9 +17,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-      - name: Syntax check
-        run: |
-          node --check index.js
-          node --check client.js
+      - name: Repository health & consistency checks
+        run: npm run check
       - name: Run unit tests
         run: npm test

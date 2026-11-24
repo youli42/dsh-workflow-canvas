@@ -99,10 +99,9 @@ Review newly added or modified tricky logic in `index.js` and `client.js`:
 
 After completing all fixes across Passes 1–6, run in one verification batch:
 
-1. `node --check index.js` and `node --check client.js`
-2. Parse all `.json` files (`package.json`, `locale/zh.json`, `locale/en.json`) and validate local doc links
-3. `npm test` (all tests must pass; add regression tests for every bug found)
-4. `git status --short` (confirm no local untracked directories are staged)
+1. `npm run check` (syntax, JSON/locale parity, `I18N` parity & dead keys, `S.*` dead styles, local doc links, backward-compatible `inject`, npm tarball size & hygiene)
+2. `npm test` (all tests must pass; add regression tests for every bug found)
+3. `git status --short` (confirm no local untracked directories are staged)
 
 Summarize the audit by pass:
 - **Fixed**: concrete findings with clickable `file://` links

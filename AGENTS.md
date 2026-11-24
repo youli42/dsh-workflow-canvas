@@ -15,7 +15,7 @@ Repository-level constraints and architecture map for developing `dsh-workflow-c
 
 ## 2. Verification & Environment
 
-- Syntax checks: `node --check index.js` and `node --check client.js`
+- Static health & consistency gate: `npm run check` (`scripts/check.mjs`: JS syntax, JSON/locale parity, `I18N` parity & dead keys, `S.*` dead styles, local doc links, backward-compatible `inject`, npm tarball size & hygiene)
 - Test suite: `npm test` (`node --test`)
 - **`client.js` `vm` sandbox tests**: Arrays/objects returned from the `vm` context have different prototypes — unwrap them (`[...arr]`, `{ ...obj }`) before `assert.deepEqual`.
 - **Windows PowerShell 5.1**:

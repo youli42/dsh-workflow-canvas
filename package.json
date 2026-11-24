@@ -16,7 +16,7 @@
     "client.js",
     "cordis.patch.yml",
     "locale/*.json",
-    "docs",
+    "docs/*.md",
     "skills",
     "icon.svg",
     "LICENSE",
@@ -50,6 +50,7 @@
     "dsh": ">=0.2.2-rc.1 <0.3.0-0"
   },
   "scripts": {
+    "check": "node scripts/check.mjs",
     "test": "node --test"
   },
   "dsh": {
