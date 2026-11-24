@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "Workflow canvas",
-    "description": "Drag nodes to orchestrate subagents on a visual canvas.",
+    "description": "Visually orchestrate subagents, conditional branching, Lead gates, and controlled retry loops.",
     "detail": "docs/DETAIL.md"
   }
 }

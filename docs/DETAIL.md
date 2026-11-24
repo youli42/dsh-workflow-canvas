@@ -42,16 +42,20 @@ are performed by the conversation itself.
   subagent upstream, or dangling dead-end subagents) are drawn dashed and skipped
   at run time.
 - **Horizontal / vertical layout & slim narrow-sidebar UI**: toggle `⇄ Horiz` /
-  `⇅ Vert` (top-in / bottom-out curves + condition `Out R / Out L`); right-click
-  any node, edge, or blank canvas for context actions (insert on wire, create
-  loop, duplicate/delete, layout, undo/redo) without conflicting with right-drag
-  wire cutting (`>= 6px`). Bottom-right floating `⊡ | 100%` pill handles fit and
-  scrub zoom.
+  `⇅ Vert` (remembered globally for new sessions, saved with custom presets and
+  exported JSON, and undoable; top-in / bottom-out curves + condition `Out R / Out L`);
+  toolbar provides compact `↶` / `↷` Undo/Redo buttons; right-click any node,
+  edge, or blank canvas for context actions (insert on wire, create loop,
+  duplicate/delete, layout, undo/redo) without conflicting with right-drag wire
+  cutting (`>= 6px`). Bottom-right floating `⊡ | 100%` pill handles fit and
+  scrub zoom, and simultaneous pan + wheel zoom stays anchored without drift.
 - **Multi-select & customizable shortcuts**: marquee drag or `Shift`/`Ctrl`+click
   to multi-select; `Shift+A` adds at cursor, `Shift+D` duplicates selected nodes
   together with internal wires, `Delete` removes selected, `Ctrl+Z` /
-  `Ctrl+Shift+Z` (`Ctrl+Y`) undo/redo, and `Esc` closes popups. Customize bindings
-  under `⋯ → ⌨ Shortcuts`.
+  `Ctrl+Shift+Z` (`Ctrl+Y`) undo/redo (including node drags and layout flips),
+  and `Esc` closes popups. Customize bindings under `⋯ → ⌨ Shortcuts`.
+- **Live preset sync**: custom presets sync automatically across already-open
+  sessions (with a manual `↻` refresh button and `H`/`V` direction tags).
 - Click any subagent node's status pill (e.g. `Done ↗`) to jump straight to its
   live subagent chat pane.
 
@@ -72,13 +76,17 @@ node positions survive.
 Subagent nodes run in an event-driven concurrency pool (default 4, configurable
 1–8 via `⋯` or `maxParallel`) via `canvas_workflow`, which supports `task`
 (override the entry task for template reuse), `reset: true` (discard a paused
-run), `retryFailed: true` / `fromNodes` (reuse succeeded nodes and re-run only
+run), `cancel: true` (cleanly stop an active or paused `need-lead` run),
+`retryFailed: true` / `fromNodes` (reuse succeeded nodes and re-run only
 failed/target segments plus downstream), and `clearMemory: true` (forget saved
 `keepSession` memories). While enabled, a per-session runtime context notifies
-the agent automatically. Intermediate Lead nodes pause with `status: "need-lead"`
-and report `decisions` / `branchSkipped` / `failed` / `emptyOutputs` plus
-`session` handovers; a terminal Lead completes directly with `status: "done"`
-and `finalLead`.
+the agent automatically. While running or paused at an intermediate Lead node,
+a unified red **`⏹ Stop`** button appears beside `● ON` and on the Entry Lead
+card to interrupt all running subagents, cancel the root turn, and clear any
+Lead pause via `/canvas-stop`. Intermediate Lead nodes pause with
+`status: "need-lead"` and report `decisions` / `branchSkipped` / `failed` /
+`emptyOutputs` plus `session` handovers and merged `refs`; a terminal Lead
+completes directly with `status: "done"` and `finalLead`.
 
 ## Memory
 

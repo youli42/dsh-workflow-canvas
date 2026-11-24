@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { apply, orderNodes, upstreamOf, downstreamLabels, briefFor, parseConditionDecision, withoutEntry, analyzeCanvasWarnings, normalizeCanvas, applyPatch, inspectPlan, sessionIdFromContext, buildActiveCanvasContext, isPermissionFailure, loopMemberIds, validateLoopEdges, executePlan } from '../index.js';
+import { apply, orderNodes, upstreamOf, downstreamLabels, briefFor, parseConditionDecision, withoutEntry, analyzeCanvasWarnings, normalizeCanvas, applyPatch, inspectPlan, sessionIdFromContext, buildActiveCanvasContext, isPermissionFailure, abortSessionRun, loopMemberIds, validateLoopEdges, executePlan } from '../index.js';
 
 test('withoutEntry strips the entry Lead', () => {
   const nodes = [
@@ -1797,4 +1797,360 @@ test('loop targeting a Lead passes loopFeedback via need-lead and crossing loops
   ];
   const leakWarns = analyzeCanvasWarnings(leakNodes, leakEdges);
   assert.ok(leakWarns.some((w) => w.includes('绕过条件裁判的旁路连线') && w.includes('编码 → 旁路')));
+});
+
+test('abortSessionRun & cancel:true cleanly end waitingLead pause (#13) and instantly abort hanging subagents (#11)', async () => {
+  const { mkdtempSync, readFileSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-wc-stop-'));
+  try {
+    // Part A (#13): Pause at intermediate Lead, then cancel via executePlan({ cancel: true }) / abortSessionRun
+    const sidPause = 's-stop-waiting-' + Date.now();
+    const scopePause = {
+      sessions: {
+        get(id) { return id === sidPause ? { header: { cwd: dir } } : null; },
+      },
+      subagents: {
+        startActivation(spec) {
+          const id = spec.label.split('#')[1];
+          return Promise.resolve({
+            childId: 'kid-' + id,
+            result: Promise.resolve({ output: [{ type: 'text', text: 'out:' + id }], stopReason: 'completed' }),
+            dispose: () => Promise.resolve(),
+          });
+        },
+      },
+    };
+    const pausePlan = {
+      task: '拍板后取消测试',
+      nodes: [
+        { id: 'a', kind: 'agent', label: '调研', role: '调研' },
+        { id: 'gate', kind: 'lead', label: 'Lead 拍板', role: '人工决策' },
+        { id: 'b', kind: 'agent', label: '执行', role: '执行' },
+      ],
+      edges: [
+        { from: 'lead', to: 'a', type: 'prompt' },
+        { from: 'a', to: 'gate', type: 'prompt' },
+        { from: 'gate', to: 'b', type: 'prompt' },
+      ],
+    };
+    const rPause = await executePlan(scopePause, pausePlan, {}, { agent: { id: sidPause }, signal: new AbortController().signal });
+    assert.equal(rPause.status, 'need-lead');
+    const pausedRunFile = JSON.parse(readFileSync(join(dir, '.dsh', 'canvas', sidPause + '.run.json'), 'utf8'));
+    assert.equal(pausedRunFile.status, 'need-lead');
+    assert.equal(pausedRunFile.waitingLead.id, 'gate');
+
+    const rCancel = await executePlan(scopePause, pausePlan, { cancel: true }, { agent: { id: sidPause }, signal: new AbortController().signal });
+    assert.equal(rCancel.status, 'cancelled');
+    assert.equal(rCancel.wasWaiting, true);
+    const haltedRunFile = JSON.parse(readFileSync(join(dir, '.dsh', 'canvas', sidPause + '.run.json'), 'utf8'));
+    assert.equal(haltedRunFile.status, 'halted');
+    assert.equal(haltedRunFile.waitingLead, null);
+
+    // After cancelling waitingLead, starting a fresh run works cleanly (no stale waitingLead lock)
+    const rFresh = await executePlan(scopePause, pausePlan, {}, { agent: { id: sidPause }, signal: new AbortController().signal });
+    assert.equal(rFresh.status, 'need-lead');
+    abortSessionRun(scopePause, sidPause);
+
+    // Part B (#11): Active subagent that never resolves on its own -> abortSessionRun aborts signal,
+    // invokes DSH native subagents.interrupt(childId, { kind: 'user' }), drainDescendants([rootAgent]),
+    // rootAgent.cancel({ kind: 'user' }, { keepInbox: true }), and unblocks executePlan immediately!
+    const sidRun = 's-stop-running-' + Date.now();
+    const interruptedChildren = [];
+    let drainedAgents = null;
+    let rootCancelArgs = null;
+    let observedSignalAborted = false;
+    let startedResolve;
+    const started = new Promise((r) => { startedResolve = r; });
+    const mockRootAgent = {
+      id: sidRun,
+      running: true,
+      cancel(cause, options) { rootCancelArgs = { cause, options }; },
+    };
+    const scopeRun = {
+      sessions: {
+        get(id) { return id === sidRun ? { header: { cwd: dir } } : null; },
+      },
+      subagents: {
+        interrupt(cid, authority) { interruptedChildren.push({ cid, authority }); },
+        drainDescendants(agents) { drainedAgents = agents; return Promise.resolve(); },
+        startActivation(spec) {
+          spec.signal.addEventListener('abort', () => { observedSignalAborted = true; }, { once: true });
+          startedResolve();
+          return Promise.resolve({
+            childId: 'kid-slow',
+            // Deliberately never resolves to prove abortPromise unblocks executePlan immediately
+            result: new Promise(() => {}),
+            dispose: () => Promise.resolve(),
+          });
+        },
+      },
+    };
+    const slowPlan = {
+      task: '运行中一键终止测试',
+      nodes: [{ id: 'slow', kind: 'agent', label: '慢节点', role: '慢任务' }],
+      edges: [{ from: 'lead', to: 'slow', type: 'prompt' }],
+    };
+    const runPromise = executePlan(scopeRun, slowPlan, {}, { agent: mockRootAgent, signal: new AbortController().signal });
+    await started;
+    const stopRes = abortSessionRun(scopeRun, sidRun, mockRootAgent);
+    assert.equal(stopRes.wasRunning, true);
+    const abortedOut = await runPromise;
+    assert.equal(abortedOut.status, 'halted');
+    assert.ok(abortedOut.error.includes('已取消'));
+    assert.equal(observedSignalAborted, true, 'runSignal aborts in-flight subagent spec.signal');
+    assert.deepEqual(interruptedChildren, [{ cid: 'kid-slow', authority: { kind: 'user' } }], 'calls DSH subagents.interrupt with user authority');
+    assert.deepEqual(drainedAgents, [mockRootAgent], 'calls DSH subagents.drainDescendants on root agent');
+    assert.deepEqual(rootCancelArgs, { cause: { kind: 'user' }, options: { keepInbox: true } }, 'calls rootAgent.cancel with verified signature');
+    const stoppedRunFile = JSON.parse(readFileSync(join(dir, '.dsh', 'canvas', sidRun + '.run.json'), 'utf8'));
+    assert.equal(stoppedRunFile.status, 'halted');
+    assert.equal(stoppedRunFile.waitingLead, null);
+
+    // Part C: `/canvas-stop` command is registered by apply(ctx) and succeeds
+    const commands = new Map();
+    const mockCtx = {
+      inject(deps, fn) {
+        if (deps.includes('commands')) {
+          fn({
+            effect(cb) { cb(); },
+            commands: { register(cmd) { commands.set(cmd.name, cmd); } },
+          });
+        }
+      },
+    };
+    apply(mockCtx);
+    assert.ok(commands.has('canvas-stop'), 'registers /canvas-stop command');
+    const cmdRes = commands.get('canvas-stop').handler({ agent: { id: sidPause } });
+    assert.equal(cmdRes.kind, 'success');
+
+    // Part D: Parent AbortSignal (DSH native chat Stop) interrupts live children AND suppresses fallbackModel retry
+    const sidNative = 's-native-stop-' + Date.now();
+    const nativeInterrupts = [];
+    let spawnCount = 0;
+    let resolveStart;
+    const startedNative = new Promise((r) => { resolveStart = r; });
+    const parentCtrl = new AbortController();
+    const scopeNative = {
+      sessions: { get: () => null },
+      subagents: {
+        interrupt(cid, authority) { nativeInterrupts.push({ cid, authority }); },
+        startActivation(spec) {
+          spawnCount += 1;
+          resolveStart();
+          return Promise.resolve({
+            childId: 'kid-fb-1',
+            result: new Promise((res) => {
+              spec.signal.addEventListener('abort', () => {
+                res({ output: [{ type: 'text', text: '' }], stopReason: 'cancelled' });
+              }, { once: true });
+            }),
+            dispose: () => Promise.resolve(),
+          });
+        },
+      },
+    };
+    const fbPlan = {
+      task: '原生停止不触发备用模型重试',
+      nodes: [{ id: 'n1', kind: 'agent', label: '编码', role: '编码', fallbackModel: 'backup-m' }],
+      edges: [{ from: 'lead', to: 'n1', type: 'prompt' }],
+    };
+    const nativePromise = executePlan(scopeNative, fbPlan, {}, { agent: { id: sidNative }, signal: parentCtrl.signal });
+    await startedNative;
+    parentCtrl.abort('user-native-stop');
+    const nativeOut = await nativePromise;
+    assert.equal(nativeOut.status, 'halted');
+    assert.deepEqual(nativeInterrupts, [{ cid: 'kid-fb-1', authority: { kind: 'user' } }], 'native parent AbortSignal interrupts live children');
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(spawnCount, 1, 'aborted node must NEVER spawn its fallbackModel retry');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('agent strong context, canvas_inspect render, and Lead render reflect loops, refs, and cancel', async () => {
+  const tools = new Map();
+  const commands = new Map();
+  const mockCtx = {
+    inject(deps, fn) {
+      const fakeScope = {
+        effect(cb) { cb(); },
+        commands: { register(c) { commands.set(c.name, c); } },
+        tools: { register(t) { tools.set(t.name, t); } },
+        subagents: {
+          startActivation(spec) {
+            const id = spec.label.split('#')[1];
+            return Promise.resolve({
+              childId: 'kid-' + id,
+              result: Promise.resolve({ output: [{ type: 'text', text: 'ok:' + id }], stopReason: 'completed' }),
+              dispose: () => Promise.resolve(),
+            });
+          },
+        },
+        sessions: { get: () => null },
+      };
+      if (deps.includes('commands') || deps.includes('tools')) fn(fakeScope);
+    },
+  };
+  apply(mockCtx);
+
+  const sid = 's-ctx-sync-' + Date.now();
+  const plan = {
+    task: '带参考与回环的强注入测试',
+    refs: ['docs/spec.md'],
+    nodes: [
+      { id: 'draft', kind: 'agent', label: '实现', role: '编码' },
+      { id: 'gate', kind: 'condition', label: '是否通过', role: '检查' },
+      { id: 'mid', kind: 'lead', label: '人工拍板', role: '确认', refs: ['docs/review.md'] },
+      { id: 'final', kind: 'lead', label: '终审', role: '交付', refs: ['docs/ship.md'] },
+    ],
+    edges: [
+      { from: 'lead', to: 'draft', type: 'prompt' },
+      { from: 'draft', to: 'gate', type: 'prompt' },
+      { from: 'gate', to: 'mid', type: 'prompt', branch: 'true' },
+      { from: 'gate', to: 'draft', type: 'prompt', branch: 'false', loop: true, maxIterations: 4 },
+      { from: 'mid', to: 'final', type: 'prompt' },
+    ],
+  };
+  commands.get('canvas-sync').handler({
+    agent: { id: sid },
+    rawInput: encodeURIComponent(JSON.stringify({ enabled: true, plan })),
+  });
+
+  // 1) Active systemPrompt strong context reflects loops + global refs + edit guidance
+  const activeCtx = buildActiveCanvasContext(sid);
+  assert.ok(activeCtx.includes('1 条受控回环'), 'active context informs agent of controlled loops');
+  assert.ok(activeCtx.includes('全局参考 ×1'), 'active context informs agent of global refs');
+  assert.ok(activeCtx.includes('参考清单、条件分支、回环'), 'active context includes new edit items');
+
+  // 2) canvas_inspect render shows global refs and loop edge badge
+  const inspectVal = tools.get('canvas_inspect').execute({}, { agent: { id: sid } });
+  const inspectText = tools.get('canvas_inspect').output.render({}, inspectVal)[0].text;
+  assert.ok(inspectText.includes('全局参考：docs/spec.md'), 'canvas_inspect render prints global refs');
+  assert.ok(inspectText.includes('↺ loop ×4'), 'canvas_inspect render prints loop edge & maxIterations');
+
+  // 3) Lead steps receive merged global + node refs in rendered tool output & cancel hint
+  const wfTool = tools.get('canvas_workflow');
+  const scope = {
+    subagents: {
+      startActivation(spec) {
+        const id = spec.label.split('#')[1];
+        if (id === 'gate') {
+          return Promise.resolve({
+            childId: 'kid-gate',
+            result: Promise.resolve({ structured: { pass: true, reason: '通过' }, output: [{ type: 'text', text: '' }], stopReason: 'completed' }),
+            dispose: () => Promise.resolve(),
+          });
+        }
+        return Promise.resolve({
+          childId: 'kid-' + id,
+          result: Promise.resolve({ output: [{ type: 'text', text: 'out:' + id }], stopReason: 'completed' }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+  const rMid = await executePlan(scope, plan, {}, { agent: { id: sid }, signal: new AbortController().signal });
+  assert.equal(rMid.status, 'need-lead');
+  const midRendered = wfTool.output.render({}, rMid)[0].text;
+  assert.ok(midRendered.includes('docs/spec.md') && midRendered.includes('docs/review.md'), 'need-lead render displays merged global + node refs');
+  assert.ok(midRendered.includes('cancel: true'), 'need-lead hint mentions cancel: true');
+
+  const pausedCtx = buildActiveCanvasContext(sid);
+  assert.ok(pausedCtx.includes('cancel: true'), 'paused strong context mentions cancel: true');
+
+  const rFinal = await executePlan(scope, plan, { leadResult: '放行' }, { agent: { id: sid }, signal: new AbortController().signal });
+  assert.equal(rFinal.status, 'done');
+  const finalRendered = wfTool.output.render({}, rFinal)[0].text;
+  assert.ok(finalRendered.includes('docs/spec.md') && finalRendered.includes('docs/ship.md'), 'finalLead render displays merged global + node refs');
+
+  // 4) Condition nodes always stay `minimal` and never trigger false multi-standard permission warnings
+  const condOnlyGen = normalizeCanvas({
+    task: '条件只读测试',
+    nodes: [
+      { id: 'c1', kind: 'condition', label: '判断1', role: 'r1' },
+      { id: 'c2', kind: 'condition', label: '判断2', role: 'r2' },
+    ],
+    edges: [{ from: 'lead', to: 'c1' }, { from: 'c1', to: 'c2', branch: 'true' }],
+  });
+  assert.equal(condOnlyGen.nodes.find((n) => n.id === 'c1').preset, 'minimal');
+  const patchedCond = applyPatch({ task: 't', nodes: withoutEntry(condOnlyGen.nodes), edges: condOnlyGen.edges }, {
+    nodes: [{ id: 'c3', kind: 'condition', label: '判断3', role: 'r3' }],
+  });
+  assert.equal(patchedCond.plan.nodes.find((n) => n.id === 'c3').preset, 'minimal');
+  const sidCondOnly = 's-cond-minimal-' + Date.now();
+  commands.get('canvas-sync').handler({
+    agent: { id: sidCondOnly },
+    rawInput: encodeURIComponent(JSON.stringify({ enabled: true, plan: patchedCond.plan })),
+  });
+  assert.ok(!buildActiveCanvasContext(sidCondOnly).includes('可写/命令型'), 'read-only condition nodes must not trigger standard permission warning');
+});
+
+test('loop retry un-prunes outside branch pruned by an inner condition on round 1', async () => {
+  let innerRound = 0;
+  let outerRound = 0;
+  const spawned = [];
+  const scope = {
+    subagents: {
+      startActivation(spec) {
+        const id = spec.label.split('#')[1];
+        spawned.push(id);
+        if (id === 'c_in') {
+          innerRound += 1;
+          // Round 1 picks `work` (pruning `alt_exit`); round 2 picks `alt_exit`!
+          return Promise.resolve({
+            childId: 'kid-cin-' + innerRound,
+            result: Promise.resolve({
+              structured: { pass: innerRound === 1, reason: innerRound === 1 ? '先走主路' : '改走备路' },
+              output: [{ type: 'text', text: '' }],
+              stopReason: 'completed',
+            }),
+            dispose: () => Promise.resolve(),
+          });
+        }
+        if (id === 'c_out') {
+          outerRound += 1;
+          return Promise.resolve({
+            childId: 'kid-cout-' + outerRound,
+            result: Promise.resolve({
+              structured: { pass: false, reason: '第1轮失败，回环重来' },
+              output: [{ type: 'text', text: '' }],
+              stopReason: 'completed',
+            }),
+            dispose: () => Promise.resolve(),
+          });
+        }
+        return Promise.resolve({
+          childId: 'kid-' + id + '-' + spawned.length,
+          result: Promise.resolve({ output: [{ type: 'text', text: 'out:' + id }], stopReason: 'completed' }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+  const plan = {
+    task: '环内分支解剪测试',
+    nodes: [
+      { id: 'start', kind: 'agent', label: '准备', role: '准备' },
+      { id: 'c_in', kind: 'condition', label: '选路', role: '选路' },
+      { id: 'work', kind: 'agent', label: '主路', role: '主路' },
+      { id: 'c_out', kind: 'condition', label: '验收', role: '验收' },
+      { id: 'alt_exit', kind: 'agent', label: '备路出口', role: '备路' },
+      { id: 'final', kind: 'lead', label: '终审', role: '终审' },
+    ],
+    edges: [
+      { from: 'lead', to: 'start', type: 'prompt' },
+      { from: 'start', to: 'c_in', type: 'prompt' },
+      { from: 'c_in', to: 'work', type: 'prompt', branch: 'true' },
+      { from: 'c_in', to: 'alt_exit', type: 'prompt', branch: 'false' },
+      { from: 'work', to: 'c_out', type: 'prompt' },
+      { from: 'c_out', to: 'final', type: 'prompt', branch: 'true' },
+      { from: 'c_out', to: 'start', type: 'prompt', branch: 'false', loop: true, maxIterations: 3 },
+      { from: 'alt_exit', to: 'final', type: 'prompt' },
+    ],
+  };
+  const res = await executePlan(scope, plan, {}, { agent: { id: 's-loop-unprune-' + Date.now() }, signal: new AbortController().signal });
+  assert.equal(res.status, 'done');
+  assert.ok(spawned.includes('alt_exit'), 'outside branch pruned on round 1 must un-prune and run when chosen on round 2');
+  assert.equal(res.results.alt_exit, 'out:alt_exit');
 });

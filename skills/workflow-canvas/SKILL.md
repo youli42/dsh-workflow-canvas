@@ -23,7 +23,7 @@ A canvas is a DAG of agents the user can see and edit.
 | inspecting or editing a manually drawn / preset canvas | `canvas_inspect` first to read node ids, models and links |
 | a visual workflow, pipeline, or graph of agents | `canvas_generate` (replaces the canvas) |
 | a change to the existing canvas | `canvas_patch` (edits in place, keeps the layout) |
-| running the canvas | `canvas_workflow` (supports `leadResult`, `task` override, `reset: true`) |
+| running the canvas | `canvas_workflow` (supports `leadResult`, `task` override, `reset: true`, `cancel: true`) |
 
 Prefer `canvas_patch` for edits: it merges by node id, so renamed, re-roled or re-modelled nodes keep their position and untouched nodes stay as they are. Call `canvas_inspect` first if you do not already know the current node ids. Regenerating throws the layout away.
 
@@ -53,14 +53,14 @@ Output sockets determine link type; every non-entry node has a single universal 
 ## Running
 
 1. The canvas must be enabled (the pill over the canvas); `canvas_workflow` refuses while it is disabled. While enabled, the host automatically injects a per-session runtime context reminder on each turn.
-2. You may pass `task` to override the entry Lead's task (handy when reusing a preset), `reset: true` to discard a paused run and start from scratch, `retryFailed: true` to reuse succeeded nodes and re-run only failed/empty/unfinished nodes plus their downstream, `fromNodes: [...]` to re-run from specific node ids/labels, `clearMemory: true` to forget saved `keepSession` child sessions, and `maxParallel` (1–8) to adjust concurrency.
+2. You may pass `task` to override the entry Lead's task (handy when reusing a preset), `reset: true` to discard a paused run and start from scratch, `cancel: true` to cleanly terminate an active or paused (`need-lead`) run, `retryFailed: true` to reuse succeeded nodes and re-run only failed/empty/unfinished nodes plus their downstream, `fromNodes: [...]` to re-run from specific node ids/labels, `clearMemory: true` to forget saved `keepSession` child sessions, and `maxParallel` (1–8) to adjust concurrency.
 3. Chained Lead nodes with **both** zero subagent upstream **and** an empty `role` — as well as dangling dead-end subagents (zero outgoing edges while an active downstream Lead exists) — are rendered dashed on the canvas and skipped at run time. Chained `Lead → Lead` stages with a non-empty `role` (or Lead + Subagent → Lead) are valid and active.
 4. Subagent capability (`preset: standard | minimal`) narrows the toolset within the main chat's permission ceiling; it cannot elevate past the parent session's sandbox/approval mode.
-3. Subagent nodes run in a dynamic concurrency pool of up to four: as soon as any node finishes, newly unblocked downstream subagents start immediately without waiting for slower siblings.
-4. Intermediate downstream Lead nodes pause the run (`status: "need-lead"`). Complete that Lead step yourself, then call `canvas_workflow` again with `leadResult` to resume downstream nodes — do not spawn an agent for it.
-5. A **terminal** Lead node (zero remaining downstream nodes) finishes directly with `status: "done"` and `finalLead`: complete the review/summary and reply directly to the user — no extra `canvas_workflow` callback is needed.
-6. When a `session-ref` link points into that Lead node the result lists `sessions: [{ label, childId }]`; you may message those agents directly to follow up.
-7. Only assign image/visual inspection roles to models that declare image input support.
+5. Subagent nodes run in a dynamic concurrency pool of up to four: as soon as any node finishes, newly unblocked downstream subagents start immediately without waiting for slower siblings.
+6. Intermediate downstream Lead nodes pause the run (`status: "need-lead"`). Complete that Lead step yourself, then call `canvas_workflow` again with `leadResult` to resume downstream nodes — do not spawn an agent for it. If the user asks to cancel/abort instead, call `canvas_workflow({ cancel: true })`.
+7. A **terminal** Lead node (zero remaining downstream nodes) finishes directly with `status: "done"` and `finalLead`: complete the review/summary and reply directly to the user — no extra `canvas_workflow` callback is needed.
+8. When a `session-ref` link points into that Lead node the result lists `sessions: [{ label, childId }]`; you may message those agents directly to follow up.
+9. Only assign image/visual inspection roles to models that declare image input support.
 
 ## Failures & verification iron rule
 

@@ -31,6 +31,8 @@ window.__ModuleLoader__.load({
     const KIND = 'workflow';
     const STORAGE_PREFIX = 'dsh-workflow-canvas:v1:';
     const PRESET_KEY = STORAGE_PREFIX + 'presets';
+    const PRESET_CHANGE_EVENT = 'dsh-wc-presets-changed';
+    const DIRECTION_KEY = STORAGE_PREFIX + 'direction';
     const SHORTCUTS_KEY = STORAGE_PREFIX + 'shortcuts';
     const DEFAULT_SHORTCUTS = {
       addNode: 'Shift+A',
@@ -119,7 +121,7 @@ window.__ModuleLoader__.load({
     const I18N = {
       zh: {
         addAgent: '+ 子代理', addLead: '+ Lead', addCond: '+ 条件', undo: '↶ 撤销', redo: '↷ 重做', sync: '↥ 同步',
-        enabled: '● 已启用', disabled: '○ 已禁用', presetName: '预设名', save: '☆ 保存',
+        enabled: '● 已启用', disabled: '○ 已禁用', save: '☆ 保存',
         presets: '☰ 预设', unsaved: '有未同步改动', synced: '已同步',
         pickModel: '选择模型', loadingModels: '加载中…', defaultEffort: '默认',
         leadThis: 'Lead（本对话）',
@@ -128,8 +130,6 @@ window.__ModuleLoader__.load({
         tipCondTrue: '条件满足（pass=true）时走这条分支，连到任意下游节点左侧入口',
         tipCondFalse: '条件不满足（pass=false）时走这条分支，连到任意下游节点左侧入口',
         tipBranchOut: '命中该分支时走这条连线，拖到任意下游节点左侧入口',
-        branchTrue: '是',
-        branchFalse: '否',
         addBranch: '+ 分支',
         branchPh: '分支名',
         delBranchTip: '删除该分支（至少保留 2 路）',
@@ -151,11 +151,10 @@ window.__ModuleLoader__.load({
         syncBadFile: '文件内容无效',
         generated: '已从对话生成画布',
         dupName: '已存在，请换一个名字',
-        guideDesc: '画一张子代理流程图',
         model: '模型', reason: '推理', role: '分工', task: '任务', taskPh: '本次任务：例如把这批反馈归类并给出建议',
         rolePhLead: '我自己这一步做什么', rolePhAgent: '这个子代理做什么',
-        memory: '记忆', scope: '能力', retry: '重试', jsonOut: 'JSON 输出',
-        sep: ': ', on: '开', off: '关', allTools: '默认（全部工具）', none: '无',
+        memory: '记忆', scope: '能力',
+        sep: ': ', on: '开', off: '关', none: '无',
         scopeMinimal: 'minimal（只读思考）', scopeStandard: 'standard（全部工具）',
         fallbackModel: '备用',
         stPending: '未执行', stRunning: '进行中', stDone: '已完成', stFailed: '失败',
@@ -164,21 +163,19 @@ window.__ModuleLoader__.load({
         presetSaveTitle: '保存当前画布（可在新会话一键载入）',
         presetNamePh: '起个名字后回车保存…',
         myPresets: '我的预设（跨会话复用）',
-        needName: '请先给预设起个名字', duplicate: '已存在，请换一个名字',
+        needName: '请先给预设起个名字',
         savedPreset: '已保存预设', saveFailed: '保存失败（存储不可用）',
         loadedPreset: '已载入预设', invalidPreset: '预设内容无效', deletedPreset: '已删除预设',
         syncFailed: '同步失败', upToDate: '已是最新', syncedToHost: '已同步到 Host',
         syncedWithStdWarn: '已同步（含可写/命令节点，请确认主对话权限已放开）',
         cannotOpen: '无法打开会话', undoDone: '已撤销', undoNone: '没有可撤销的操作', redoDone: '已重做', redoNone: '没有可重做的操作',
-        leadLocked: '入口 Lead 不能删除', modelsMissing: '模型列表未加载',
+        leadLocked: '入口 Lead 不能删除',
         tipLead: 'Lead 步骤在对话里执行，画布不追踪其状态',
         tipOrphan: '未连线：运行时会被跳过', tipStatus: '子代理节点的运行状态',
-        tipZoom: '滚轮缩放（以光标为中心）',
         tipResetZoom: '点击回到 100% 并聚焦 Lead；左右拖拽可连续缩放',
         tipLocate: '自适应缩放并居中，让所有节点完整显示在视野内',
         locate: '⊡ 全览',
         importBtn: '⇩ 导入',
-        tipImport: '从剪贴板导入模型生成的画布（先复制聊天里的画布 JSON）',
         importOk: '已导入画布，共 ',
         tipMore: '更多',
         help: '使用说明',
@@ -193,15 +190,15 @@ window.__ModuleLoader__.load({
           '3. 输出口决定连线类型：prompt（灰，纯文本）、structured（蓝，JSON）、session（紫，复用上游会话）；条件节点支持多路分支，并可将分支连回上游（或多选节点右键「↺ 设为回环」）实现带反馈的受控重试（点 ↺ 徽章可调 1–10 次，超限自动交 Lead 熔断）。',
           '4. 节点左侧为统一通用输入口，可直接接收任意颜色的连线；拖已连接的左口可断开最近一条连线。',
           '5. 每个节点可设模型、推理强度、能力范围、备用模型、是否记忆；复杂任务/分工/条件可点 ⤢ 展开大框编辑。',
-          '6. 连好后点「● 已启用」，然后对对话说「跑一次」，由我调用执行。',
-          '7. 遇到 Lead 节点会暂停，我做完再把结果交回去继续。',
+          '6. 连好后点左上角「● 已启用」，可直接点入口节点「▶ 运行」或在对话说「跑一次」开跑；运行中或停在「⏸ 待拍板」时，点左上角或入口节点旁的「⏹ 终止」即可一键中止全部子代理并解除等待状态。',
+          '7. 遇到 Lead 节点会暂停，我做完再把结果交回去继续（或在对话里说「取消」即可结束流程）。',
           '8. 没连线的节点显示为虚线，运行时会被跳过。',
-          '9. 右键单击节点 / 连线 / 空白处可弹出快捷菜单（含线上插点、复制删除、新建节点等）；按住右键划过连线可切断（可在「⋯」开关）。',
-          '10. 点右上角「☰ 预设」顶部即可保存当前画布，开新对话时一键载入跨会话复用。',
+          '9. 右键单击节点 / 连线 / 空白处可弹出快捷菜单（含线上插点、设为回环、复制删除、新建节点等）；按住右键划过连线可切断（可在「⋯」开关）。',
+          '10. 点右上角「☰ 预设」可保存当前画布（连同横/竖排方向），多会话实时同步并支持点 ↻ 刷新；切换横/竖排会自动记住默认偏好供新会话沿用。',
           '11. 你可以直接让我改画布：说「把那三个节点的分工改成…」，我会就地修改，不动你摆的位置。',
           '12. session 线连到 Lead 时，我会在暂停那步拿到那个子代理的会话，可以继续追问它。',
           '13. 按住鼠标中键（或空格 + 左键）拖动画布平移；点击子代理节点左下角状态可直达它的对话记录。',
-          '14. 快捷键：默认 Shift+A 新建节点，Shift+D 复制节点与连线，Delete 删除，Ctrl+Z 撤销，Esc 关闭弹窗（可在「⋯ → 快捷键设置」自定义）。',
+          '14. 快捷键与历史：顶栏提供 ↶ 撤销 / ↷ 重做按钮（支持撤销节点移动与横竖排切换）；默认 Shift+A 新建，Shift+D 复制，Delete 删除，Ctrl+Z / Ctrl+Shift+Z（Ctrl+Y）撤销重做，Esc 关闭弹窗（可在「⋯ → 快捷键设置」自定义）。',
         ].join('\n'),
         openChat: '会话',
         tipOpenRun: '点击打开该子代理的对话记录',
@@ -227,9 +224,13 @@ window.__ModuleLoader__.load({
         verdictFallback: '已跳过中间分支 → 转交 Lead：',
         verdictNoReason: '（裁判未附额外说明）',
         tipVerdictChip: '点击查看完整判断理由',
-        runBtn: '▶ 运行',
-        runBtnRunning: '进行中…',
-        runBtnWaiting: '⏸ 等待决策',
+        stopSent: '已发送终止指令',
+        stopWaitingDone: '已结束等待拍板并终止流程',
+        stopFailed: '终止请求失败',
+        refreshPresetsTip: '刷新预设列表',
+        presetsRefreshed: '预设列表已刷新',
+        presetDirTB: '竖',
+        presetDirLR: '横',
         runStarted: '已向当前会话发起画布执行',
         runFailed: '发起运行失败',
         runSendUnavailable: '当前宿主不支持从画布直接发起对话，请在聊天框发送消息启动',
@@ -313,12 +314,10 @@ window.__ModuleLoader__.load({
         tipMemoryPick: '选择要续接的历史子会话（默认自动沿用最新记忆）',
         tipPreset: '能力范围（点一下切换，受主对话权限上限约束）：standard = 全部工具（读写文件、跑命令、子代理、工作流、网页、办公）；minimal = 只读思考（文件读写关闭，没有子代理/工作流/网页）',
         tipFallback: '失败重试：该节点出错时自动换一个模型再跑一次',
-        tipStructured: 'JSON 输出：要求该节点返回 JSON 对象，structured 连线会把结果作为 JSON 传给下游',
-        lang: 'ZH',
       },
       en: {
         addAgent: '+ Subagent', addLead: '+ Lead', addCond: '+ Condition', undo: '↶ Undo', redo: '↷ Redo', sync: '↥ Sync',
-        enabled: '● ON', disabled: '○ OFF', presetName: 'Preset name', save: '☆ Save',
+        enabled: '● ON', disabled: '○ OFF', save: '☆ Save',
         presets: '☰ Presets', unsaved: 'Unsaved changes', synced: 'Synced',
         pickModel: 'Pick a model', loadingModels: 'Loading…', defaultEffort: 'default',
         leadThis: 'Lead (this chat)',
@@ -327,8 +326,6 @@ window.__ModuleLoader__.load({
         tipCondTrue: 'Runs when condition passes (pass=true); connect to any downstream input',
         tipCondFalse: 'Runs when condition fails (pass=false); connect to any downstream input',
         tipBranchOut: 'Runs when this branch matches; connect to any downstream input',
-        branchTrue: 'Yes',
-        branchFalse: 'No',
         addBranch: '+ Case',
         branchPh: 'Branch name',
         delBranchTip: 'Remove this branch (minimum 2)',
@@ -350,11 +347,10 @@ window.__ModuleLoader__.load({
         syncBadFile: 'File content is invalid',
         generated: 'Canvas generated from chat',
         dupName: 'already exists, pick another name',
-        guideDesc: 'Sketch a subagent workflow',
         model: 'Model', reason: 'Reasoning', role: 'Role', task: 'Task', taskPh: 'Task, e.g. classify these reports and suggest actions',
         rolePhLead: 'What I do in this step', rolePhAgent: 'What this subagent does',
-        memory: 'Memory', scope: 'Scope', retry: 'Retry', jsonOut: 'JSON out',
-        sep: ': ', on: 'on', off: 'off', allTools: 'default (all tools)', none: 'none',
+        memory: 'Memory', scope: 'Scope',
+        sep: ': ', on: 'on', off: 'off', none: 'none',
         scopeMinimal: 'minimal (read-only thinking)', scopeStandard: 'standard (all tools)',
         fallbackModel: 'Fallback',
         stPending: 'Pending', stRunning: 'Running', stDone: 'Done', stFailed: 'Failed',
@@ -363,21 +359,19 @@ window.__ModuleLoader__.load({
         presetSaveTitle: 'Save current canvas (reuse in any new chat)',
         presetNamePh: 'Name this canvas…',
         myPresets: 'Saved presets (all sessions)',
-        needName: 'Name the preset first', duplicate: 'already exists, pick another name',
+        needName: 'Name the preset first',
         savedPreset: 'Saved preset', saveFailed: 'Save failed (storage unavailable)',
         loadedPreset: 'Loaded preset', invalidPreset: 'Preset content is invalid', deletedPreset: 'Deleted preset',
         syncFailed: 'Sync failed', upToDate: 'Already up to date', syncedToHost: 'Synced to host',
         syncedWithStdWarn: 'Synced (has write/tool nodes — check main chat permission mode)',
         cannotOpen: 'Cannot open the session', undoDone: 'Undone', undoNone: 'Nothing to undo', redoDone: 'Redone', redoNone: 'Nothing to redo',
-        leadLocked: 'The entry Lead cannot be deleted', modelsMissing: 'Model list is not loaded',
+        leadLocked: 'The entry Lead cannot be deleted',
         tipLead: 'Lead steps run in the chat; the canvas does not track them',
         tipOrphan: 'Unlinked: skipped when the canvas runs', tipStatus: 'Subagent run status',
-        tipZoom: 'Wheel zooms around the cursor',
         tipResetZoom: 'Click to reset to 100% on Lead; drag left/right to scrub zoom',
         tipLocate: 'Fit all nodes into the visible canvas',
         locate: '⊡ Fit',
         importBtn: '⇩ Import',
-        tipImport: 'Import a model-generated canvas from the clipboard (copy the canvas JSON from chat first)',
         importOk: 'Canvas imported, ',
         tipMore: 'More',
         help: 'How to use',
@@ -392,15 +386,15 @@ window.__ModuleLoader__.load({
           '3. Output sockets choose channel type: prompt (grey text), structured (blue JSON), session (purple warm session), or multi-way condition branches; wire a condition branch back upstream (or right-click selected nodes → ↺ Create loop) for bounded feedback retries (click the ↺ pill for 1–10 retries).',
           '4. Every node has one universal left input that accepts any incoming wire; drag a connected input away to detach the latest wire.',
           '5. Each node sets model, reasoning, capability scope, fallback model and memory; click ⤢ to expand a larger editor for long text.',
-          '6. Press ● ON, then ask in chat to run the canvas.',
-          '7. The run pauses at every Lead node so the conversation can do that step.',
+          '6. Press ● ON, then click ▶ Run on the Entry Lead or ask in chat to start; while running or paused at a Lead gate, click ⏹ Stop beside ● ON (or on the Entry card) to abort all running subagents and clear the pause.',
+          '7. The run pauses at intermediate Lead nodes for your decision (reply to continue, or ask to cancel / click ⏹ Stop).',
           '8. Unlinked nodes are dashed and skipped at run time.',
-          '9. Right-click a node, wire, or blank canvas for context actions (insert on wire, duplicate/delete, add nodes); right-drag across a wire to cut it (toggle under ⋯).',
-          '10. Open ☰ Presets to save the current canvas at the top and load it in any new chat.',
+          '9. Right-click a node, wire, or blank canvas for context actions (insert on wire, create loop, duplicate/delete, add nodes); right-drag across a wire to cut it (toggle under ⋯).',
+          '10. Open ☰ Presets to save the current canvas (including horizontal/vertical direction) — presets sync live across open chats with a manual ↻ refresh button; toggling layout direction is remembered for new sessions.',
           '11. You can ask me to edit the canvas; I patch it in place and keep your layout.',
           '12. A session link into a Lead step hands me that child agent, so I can follow up with it.',
           '13. Hold the middle mouse button (or Space + drag) to pan; click a subagent status badge at the bottom-left to open its chat.',
-          '14. Shortcuts: Shift+A adds a node at cursor, Shift+D duplicates nodes & links, Delete removes selected, Ctrl+Z undoes, Esc closes popups (customizable under ⋯ → Shortcuts).',
+          '14. History & shortcuts: toolbar ↶ Undo / ↷ Redo buttons undo structural edits, node drags, and layout flips; Shift+A adds at cursor, Shift+D duplicates, Delete removes, Ctrl+Z / Ctrl+Shift+Z (Ctrl+Y) undo/redo, Esc closes popups (customizable under ⋯ → Shortcuts).',
         ].join('\n'),
         openChat: 'Chat',
         tipOpenRun: 'Click to open this subagent conversation',
@@ -426,9 +420,13 @@ window.__ModuleLoader__.load({
         verdictFallback: 'Skipped branches → Lead: ',
         verdictNoReason: '(No extra reason provided)',
         tipVerdictChip: 'Click to inspect verdict reason',
-        runBtn: '▶ Run',
-        runBtnRunning: 'Running…',
-        runBtnWaiting: '⏸ Awaiting Lead',
+        stopSent: 'Stop signal sent',
+        stopWaitingDone: 'Cancelled awaiting Lead gate',
+        stopFailed: 'Failed to stop workflow',
+        refreshPresetsTip: 'Refresh presets',
+        presetsRefreshed: 'Presets refreshed',
+        presetDirTB: 'V',
+        presetDirLR: 'H',
         runStarted: 'Workflow run queued in this chat',
         runFailed: 'Failed to start run',
         runSendUnavailable: 'Direct canvas launch is unavailable in this host; send a message in chat to start',
@@ -512,8 +510,6 @@ window.__ModuleLoader__.load({
         tipMemoryPick: 'Pick which past child session to resume (defaults to latest)',
         tipPreset: 'Capability (click to toggle; bounded by the main chat permission mode): standard = all tools (files, shells, subagents, workflow, web, office); minimal = read-only thinking (no file writes, no subagents/workflow/web)',
         tipFallback: 'Retry: when this node fails, rerun it once on another model',
-        tipStructured: 'JSON output: require an object result; structured links pass it downstream as JSON',
-        lang: 'EN',
       },
     };
 
@@ -567,31 +563,30 @@ window.__ModuleLoader__.load({
         width: '1px', height: '16px', background: C.border, opacity: 0.65,
         flex: '0 0 auto', margin: '0 2px',
       },
-      toggleOn: {
-        padding: '5px 12px', borderRadius: '6px', border: '1px solid ' + C.accent,
-        background: 'transparent', color: C.accent, fontSize: '12px', fontWeight: 600,
-        cursor: 'pointer', whiteSpace: 'nowrap',
-      },
-      toggleOff: {
-        padding: '5px 12px', borderRadius: '6px', border: '1px solid ' + C.border,
-        background: 'transparent', color: C.dim, fontSize: '12px',
-        cursor: 'pointer', whiteSpace: 'nowrap',
-      },
       status: {
         fontSize: '11px', color: C.dim,
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '160px',
+      },
+      floatTopLeft: {
+        position: 'absolute', top: '10px', left: '10px', zIndex: 30,
+        display: 'inline-flex', alignItems: 'center', gap: '6px',
       },
       floatOn: {
-        position: 'absolute', top: '10px', left: '10px', zIndex: 30,
         padding: '5px 10px', borderRadius: '999px', border: '1px solid ' + C.accent,
         background: C.elevated, color: C.accent, fontSize: '11px', fontWeight: 600,
         cursor: 'pointer', boxShadow: '0 4px 14px rgba(0,0,0,0.35)',
       },
       floatOff: {
-        position: 'absolute', top: '10px', left: '10px', zIndex: 30,
         padding: '5px 10px', borderRadius: '999px', border: '1px solid ' + C.border,
         background: C.elevated, color: C.dim, fontSize: '11px', fontWeight: 600,
         cursor: 'pointer', boxShadow: '0 4px 14px rgba(0,0,0,0.35)',
+      },
+      floatStop: {
+        padding: '5px 10px', borderRadius: '999px', border: '1px solid rgba(229,83,75,0.75)',
+        background: C.elevated, color: '#e5534b', fontSize: '11px', fontWeight: 600,
+        cursor: 'pointer', boxShadow: '0 4px 14px rgba(0,0,0,0.35)',
+        display: 'inline-flex', alignItems: 'center', gap: '5px', lineHeight: '14px',
+        whiteSpace: 'nowrap',
       },
       floatZoomBar: {
         position: 'absolute', right: '10px', bottom: '10px', zIndex: 30,
@@ -705,7 +700,6 @@ window.__ModuleLoader__.load({
         marginLeft: 'auto', display: 'flex', alignItems: 'center',
         gap: '6px', position: 'relative', flex: '0 0 auto',
       },
-      presetRowTop: { display: 'flex', alignItems: 'center', gap: '5px' },
       presetMenu: {
         position: 'absolute', right: 0, top: '100%', marginTop: '4px', minWidth: '236px',
         maxHeight: '320px', overflowY: 'auto', background: C.elevated, color: C.text,
@@ -798,12 +792,6 @@ window.__ModuleLoader__.load({
       fieldFallback: { position: 'absolute', left: '10px', right: '10px', top: '101px', height: '22px', display: 'flex', alignItems: 'center', gap: '6px' },
       fieldMemory: { position: 'absolute', left: '10px', right: '10px', top: '123px', height: '22px', display: 'flex', alignItems: 'center', gap: '6px' },
       fieldRole: { position: 'absolute', left: '10px', right: '10px', top: '145px', height: '22px', display: 'flex', alignItems: 'center', gap: '6px' },
-      fieldRoleTop: { position: 'absolute', left: '10px', right: '10px', top: '34px', height: '24px', display: 'flex', alignItems: 'center', gap: '6px' },
-      optRow: {
-        position: 'absolute', left: '10px', right: '10px', top: '114px', height: '18px',
-        display: 'flex', alignItems: 'center', gap: '5px', fontSize: '9px', color: C.dim,
-        overflow: 'hidden',
-      },
 
       toggleSwitch: {
         flex: '1 1 auto', width: '100%', height: '18px', boxSizing: 'border-box', padding: '0 5px', borderRadius: '4px',
@@ -814,18 +802,6 @@ window.__ModuleLoader__.load({
         flex: '1 1 auto', width: '100%', height: '18px', boxSizing: 'border-box', padding: '0 5px', borderRadius: '4px',
         border: '1px solid ' + C.accent, background: C.base, color: C.accent,
         fontSize: '10px', cursor: 'pointer', outline: 'none', textAlign: 'center', lineHeight: '14px',
-      },
-      optChip: {
-        flex: '0 0 auto', padding: '2px 6px', borderRadius: '4px',
-        border: '1px solid ' + C.border, background: 'transparent', color: C.dim,
-        fontSize: '9px', cursor: 'pointer', whiteSpace: 'nowrap', lineHeight: '12px',
-        outline: 'none',
-      },
-      optChipOn: {
-        flex: '0 0 auto', padding: '2px 6px', borderRadius: '4px',
-        border: '1px solid ' + C.accent, background: C.hover, color: C.accent,
-        fontSize: '9px', cursor: 'pointer', whiteSpace: 'nowrap', lineHeight: '12px',
-        outline: 'none',
       },
       fieldLabel: { flex: '0 0 30px', width: '30px', fontSize: '9px', color: C.dim, whiteSpace: 'nowrap' },
       fieldLabelEn: { flex: '0 0 46px', width: '46px', fontSize: '9px', color: C.dim, whiteSpace: 'nowrap' },
@@ -910,12 +886,6 @@ window.__ModuleLoader__.load({
         background: C.base, color: C.text, fontSize: '10px', cursor: 'pointer', textAlign: 'left',
         lineHeight: '14px',
       },
-      reasonChip: {
-        flex: '0 0 auto', maxWidth: '44px', padding: '3px 4px', borderRadius: '5px',
-        border: '1px solid ' + C.border, background: 'transparent', color: C.dim,
-        fontSize: '9px', cursor: 'pointer', whiteSpace: 'nowrap',
-        overflow: 'hidden', textOverflow: 'ellipsis',
-      },
       selectText: { flex: '1 1 auto', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
       caret: { flex: '0 0 auto', color: C.dim, fontSize: '9px' },
       menu: {
@@ -944,14 +914,6 @@ window.__ModuleLoader__.load({
         borderRadius: '50%', background: C.elevated, border: '1px solid ' + C.border,
         color: '#e5534b', fontSize: '12px', lineHeight: '16px', textAlign: 'center',
         cursor: 'pointer', zIndex: 8, userSelect: 'none',
-      },
-      runsBadge: {
-        position: 'absolute', right: '10px', bottom: '2px', fontSize: '9px',
-        color: C.accent, cursor: 'pointer', userSelect: 'none', zIndex: 4,
-      },
-      statusBar: {
-        position: 'absolute', left: '2px', top: '10px', bottom: '10px', width: '3px',
-        borderRadius: '2px', zIndex: 3,
       },
       verdictChip: {
         position: 'absolute', left: '0', top: 'calc(100% + 5px)', maxWidth: NODE_W + 'px',
@@ -1162,6 +1124,91 @@ window.__ModuleLoader__.load({
           ? 'Start the enabled workflow directly (auto-syncs unsaved edits). For retryFailed, reset, or clearing node memory, specify in chat.'
           : '直接按当前画布起跑（会自动同步未保存改动）。如需断点续跑（retryFailed）、从头重跑（reset）或清理记忆节点，可在聊天中说明。',
       };
+    }
+
+    /** Compute unified Stop button visibility, label and tooltip across running & waitingLead states. */
+    function stopButtonState({ sessionRunning, runningNodesCount, waitingLead, triggering, stopping, lang }) {
+      const en = lang === 'en';
+      const hasRunning = Boolean(sessionRunning || triggering || Number(runningNodesCount) > 0);
+      const hasWaiting = Boolean(waitingLead);
+      if (!hasRunning && !hasWaiting) {
+        return { visible: false, disabled: true, mode: 'idle', label: '', title: '' };
+      }
+      const mode = hasRunning ? 'running' : 'waiting';
+      return {
+        visible: true,
+        disabled: Boolean(stopping),
+        mode,
+        label: stopping
+          ? (en ? 'Stopping…' : '终止中…')
+          : (en ? '⏹ Stop' : '⏹ 终止'),
+        title: mode === 'waiting'
+          ? (en ? 'Cancel the paused Lead gate and end this workflow run' : '结束当前等待拍板状态并终止本轮流程')
+          : (en ? 'Stop all running workflow tasks and subagents' : '一键终止全部正在运行的任务与子代理'),
+      };
+    }
+
+    /**
+     * Derive Lead node ready/done sets cleanly, respecting authoritative `runState.status`
+     * (`halted` / `done` / `idle` / `need-lead`) so a stopped or completed workflow can never
+     * falsely re-enter "Awaiting Lead" from historical subagent statuses.
+     */
+    function deriveLeadStatuses({ enabled, nodes, edges, statusById, sessionRunning, runState, reachableIds }) {
+      const leadReadyIds = new Set();
+      const leadDoneIds = new Set();
+      if (!enabled) return { leadReadyIds, leadDoneIds };
+
+      const nodeList = Array.isArray(nodes) ? nodes : [];
+      const edgeList = forwardEdgesUI(edges);
+      const nodeById = new Map(nodeList.map((n) => [n.id, n]));
+      const reach = reachableIds || reachableFrom(nodeList, edgeList);
+      const stMap = statusById || {};
+
+      if (runState && Array.isArray(runState.done)) {
+        for (const did of runState.done) {
+          const dn = nodeById.get(did);
+          if (dn && dn.kind === 'lead' && dn.id !== 'lead') leadDoneIds.add(did);
+        }
+      }
+      if (runState && runState.status === 'need-lead' && runState.waitingLead && runState.waitingLead.id) {
+        leadReadyIds.add(runState.waitingLead.id);
+      } else if (runState && !runState.status && runState.waitingLead && runState.waitingLead.id) {
+        leadReadyIds.add(runState.waitingLead.id);
+      }
+
+      // If the backend reported a terminal or explicit paused runState, treat it as authoritative
+      // instead of guessing ready Leads from historical child statuses.
+      const authoritativeStatus = runState && typeof runState.status === 'string' ? runState.status : '';
+      if (authoritativeStatus === 'halted' || authoritativeStatus === 'done' || authoritativeStatus === 'idle' || authoritativeStatus === 'need-lead') {
+        return { leadReadyIds, leadDoneIds };
+      }
+
+      const hasCondNode = nodeList.some((x) => x && x.kind === 'condition');
+      for (const n of nodeList) {
+        if (!n || n.kind !== 'lead' || n.id === 'lead' || !reach.has(n.id)) continue;
+        if (leadReadyIds.has(n.id) || leadDoneIds.has(n.id)) continue;
+        const upIds = edgeList
+          .filter((e) => e.to === n.id && e.from !== 'lead' && nodeById.has(e.from))
+          .map((e) => e.from);
+        if (!upIds.length) continue;
+        const upAgents = upIds.filter((id) => nodeById.get(id).kind !== 'lead');
+        if (!upAgents.length) continue;
+        const anyUpRunning = upAgents.some((id) => stMap[id] === 'running');
+        const allUpDone = hasCondNode
+          ? (!anyUpRunning && upAgents.some((id) => stMap[id] === 'done' || stMap[id] === 'failed'))
+          : upAgents.every((id) => stMap[id] === 'done' || stMap[id] === 'failed');
+        if (!allUpDone) continue;
+        const downIds = edgeList.filter((e) => e.from === n.id).map((e) => e.to);
+        if (!downIds.length) {
+          if (sessionRunning) leadReadyIds.add(n.id);
+          else leadDoneIds.add(n.id);
+        } else {
+          const anyDownStarted = downIds.some((id) => Boolean(stMap[id]));
+          if (!anyDownStarted) leadReadyIds.add(n.id);
+          else leadDoneIds.add(n.id);
+        }
+      }
+      return { leadReadyIds, leadDoneIds };
     }
 
     function isCustomBranches(node) {
@@ -1439,6 +1486,12 @@ window.__ModuleLoader__.load({
         }
       }
       if (!reach.has(exitId)) return { ok: false, reason: 'loopDisconnected' };
+      // Verify the full runtime loop body (`descendants(entry) ∩ ancestors(exit)` across the
+      // entire graph) never pulls in a node already owned by another loop.
+      const fullMembers = loopMemberIdsUI(list, edges, { from: exitId, to: entryId, loop: true });
+      for (const mid of fullMembers) {
+        if (existing.byNode.has(mid)) return { ok: false, reason: 'loopOverlap' };
+      }
       const exitNode = byId.get(exitId);
       return {
         ok: true,
@@ -1632,8 +1685,8 @@ window.__ModuleLoader__.load({
       }
       const queue = nodes.filter((n) => indeg.get(n.id) === 0).map((n) => n.id);
       const out = [];
-      while (queue.length) {
-        const id = queue.shift();
+      for (let i = 0; i < queue.length; i += 1) {
+        const id = queue[i];
         out.push(id);
         for (const next of adj.get(id)) {
           indeg.set(next, indeg.get(next) - 1);
@@ -1735,8 +1788,8 @@ window.__ModuleLoader__.load({
       }
       const seen = new Set([toId]);
       const queue = [toId];
-      while (queue.length) {
-        const cur = queue.shift();
+      for (let i = 0; i < queue.length; i += 1) {
+        const cur = queue[i];
         if (cur === fromId) return true;
         for (const next of adj.get(cur) || []) {
           if (!seen.has(next)) { seen.add(next); queue.push(next); }
@@ -1791,14 +1844,16 @@ window.__ModuleLoader__.load({
         }
       } else {
         const COL_PITCH = 300;
-        const ROW_PITCH = 262;
+        const ROW_GAP = 28;
         const MID_Y = 320;
         for (const [col, colNodes] of columns.entries()) {
           const ordered = colNodes.slice().sort((a, b) => (a.y || 0) - (b.y || 0));
-          const totalH = (ordered.length - 1) * ROW_PITCH + NODE_H;
-          const startY = Math.round(MID_Y - totalH / 2);
+          const heights = ordered.map((n) => nodeHeight(n));
+          const totalH = heights.reduce((sum, hVal) => sum + hVal, 0) + Math.max(0, ordered.length - 1) * ROW_GAP;
+          let cursorY = Math.round(MID_Y - totalH / 2);
           ordered.forEach((n, row) => {
-            posById.set(n.id, { x: 40 + col * COL_PITCH, y: startY + row * ROW_PITCH });
+            posById.set(n.id, { x: 40 + col * COL_PITCH, y: cursorY });
+            cursorY += heights[row] + ROW_GAP;
           });
         }
       }
@@ -2343,6 +2398,37 @@ window.__ModuleLoader__.load({
       return { k, x: cx - lx * k, y: cy - ly * k };
     }
 
+    /**
+     * Apply one incremental pan step on top of the latest live `curView` so concurrent
+     * wheel zoom anchor shifts are never overwritten by stale drag origins.
+     */
+    function applyPanStep(curView, pan, clientX, clientY) {
+      const dx = clientX - pan.lastX;
+      const dy = clientY - pan.lastY;
+      return {
+        view: { k: curView.k, x: curView.x + dx, y: curView.y + dy },
+        pan: { lastX: clientX, lastY: clientY },
+      };
+    }
+
+    function normalizeDirection(val) {
+      return val === 'tb' ? 'tb' : 'lr';
+    }
+
+    function loadDefaultDirection() {
+      try {
+        return normalizeDirection(window.localStorage.getItem(DIRECTION_KEY));
+      } catch (_e) {
+        return 'lr';
+      }
+    }
+
+    function saveDefaultDirection(dir) {
+      try {
+        window.localStorage.setItem(DIRECTION_KEY, normalizeDirection(dir));
+      } catch (_e) { /* ignore */ }
+    }
+
     function loadPresets() {
       try {
         const raw = window.localStorage.getItem(PRESET_KEY);
@@ -2357,6 +2443,16 @@ window.__ModuleLoader__.load({
     function savePresets(presets) {
       try {
         window.localStorage.setItem(PRESET_KEY, JSON.stringify(presets));
+        // Native `storage` events only fire across separate windows, not across keepMounted
+        // session tabs inside the same Electron window; broadcast a custom event for instant sync.
+        try {
+          if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+            const ev = typeof CustomEvent === 'function'
+              ? new CustomEvent(PRESET_CHANGE_EVENT)
+              : { type: PRESET_CHANGE_EVENT };
+            window.dispatchEvent(ev);
+          }
+        } catch (_evErr) { /* ignore in non-DOM test env */ }
         return true;
       } catch (_e) {
         return false;
@@ -2437,8 +2533,15 @@ window.__ModuleLoader__.load({
       const sessionId = props && props.sessionId;
       const stored = useRef(loadDoc(sessionId));
       const initial = stored.current;
+      const initialDir = (initial && (initial.direction === 'tb' || initial.direction === 'lr'))
+        ? initial.direction
+        : loadDefaultDirection();
 
-      const [nodes, setNodes] = useState(() => (initial ? initial.nodes : defaultNodes()));
+      const [nodes, setNodes] = useState(() => {
+        if (initial) return initial.nodes;
+        const dn = defaultNodes();
+        return initialDir === 'tb' ? layoutGraph(dn, defaultEdges(), 'tb') : dn;
+      });
       const [edges, setEdges] = useState(() => (initial ? initial.edges : defaultEdges()));
       const [selectedIds, setSelectedIds] = useState([]);
       const [marquee, setMarquee] = useState(null);
@@ -2472,7 +2575,7 @@ window.__ModuleLoader__.load({
       const [modelsLoading, setModelsLoading] = useState(() => cachedModels.length === 0);
       const [openModelFor, setOpenModelFor] = useState(null);
       const [enabled, setEnabled] = useState(() => Boolean(initial && initial.enabled));
-      const [direction, setDirection] = useState(() => (initial && initial.direction === 'tb' ? 'tb' : 'lr'));
+      const [direction, setDirection] = useState(initialDir);
       const directionRef = useRef(direction);
       directionRef.current = direction;
 
@@ -2489,12 +2592,12 @@ window.__ModuleLoader__.load({
       const rightClickRef = useRef(null);
       const nodeDrag = useRef(null);
       const panDrag = useRef(null);
+      const zoomScrubbing = useRef(false);
       const [panning, setPanning] = useState(false);
       const spaceDown = useRef(false);
       const [spaceHeld, setSpaceHeld] = useState(false);
       const statusTimer = useRef(null);
       const dropdownRef = useRef(null);
-      const syncTimer = useRef(null);
       const lastSync = useRef('');
       const historyRef = useRef([]);
       const redoRef = useRef([]);
@@ -2510,11 +2613,50 @@ window.__ModuleLoader__.load({
       const [sessionRunning, setSessionRunning] = useState(false);
       const [runTriggering, setRunTriggering] = useState(false);
       const runTriggeringRef = useRef(false);
+      const [stopping, setStopping] = useState(false);
+      const stoppingRef = useRef(false);
       const pendingHandledRef = useRef(false);
       const lastNodePrefsRef = useRef({ provider: '', model: '', reasoning: '', preset: 'standard' });
       const [presets, setPresets] = useState(loadPresets);
       const [presetOpen, setPresetOpen] = useState(null);
       const [presetName, setPresetName] = useState('');
+
+      const refreshPresets = (announce) => {
+        const latest = loadPresets();
+        setPresets(latest);
+        if (announce) flash(t('presetsRefreshed'));
+        return latest;
+      };
+
+      // Keep preset list fresh across mounted session tabs (same window + cross-window).
+      useEffect(() => {
+        const sync = () => setPresets(loadPresets());
+        const onStorage = (ev) => {
+          if (!ev || ev.key === PRESET_KEY || ev.key === null) sync();
+        };
+        const onVis = () => {
+          if (typeof document !== 'undefined' && document.visibilityState === 'visible') sync();
+        };
+        if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+          window.addEventListener('storage', onStorage);
+          window.addEventListener(PRESET_CHANGE_EVENT, sync);
+          window.addEventListener('focus', sync);
+        }
+        if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+          document.addEventListener('visibilitychange', onVis);
+        }
+        sync();
+        return () => {
+          if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+            window.removeEventListener('storage', onStorage);
+            window.removeEventListener(PRESET_CHANGE_EVENT, sync);
+            window.removeEventListener('focus', sync);
+          }
+          if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
+            document.removeEventListener('visibilitychange', onVis);
+          }
+        };
+      }, [sessionId]);
       const [lang, setLang] = useState(loadLang);
       const t = (key) => (I18N[lang] && I18N[lang][key]) || I18N.zh[key] || key;
       const toggleLang = () => {
@@ -2621,7 +2763,7 @@ window.__ModuleLoader__.load({
           const sig = planSig(nextEnabled, curNodes, curEdges, overrideParallel);
           if (sig === lastSync.current) { setDirty(false); flash(t('upToDate')); return Promise.resolve(true); }
           const line = '/canvas-sync ' + encodeURIComponent(sig);
-          const hasStandardAgent = nextEnabled && curNodes.some((n) => n && n.kind !== 'lead' && (n.preset || 'standard') !== 'minimal');
+          const hasStandardAgent = nextEnabled && curNodes.some((n) => n && n.kind !== 'lead' && n.kind !== 'condition' && (n.preset || 'standard') !== 'minimal');
           return face.command(line).then((ack) => {
             if (ack && ack.ok) {
               lastSync.current = sig;
@@ -2698,6 +2840,109 @@ window.__ModuleLoader__.load({
               setRunTriggering(false);
             }, 1200);
           }
+        }
+      };
+
+      /**
+       * Unified Stop action for both in-flight executions (#11) and paused Lead gates (#13),
+       * using DSH 0.2.2 verified APIs:
+       *   - `face.command('/canvas-stop')` (executes concurrently even while running; triggers
+       *     backend `subagents.interrupt` + `drainDescendants([agent])` + `agent.cancel` + clears waitingLead)
+       *   - `remote.subagents.interruptByUser(childId)` for every live subagent
+       *   - `face.cancel()` / `remote.session.cancel({ sessionId })` for the root session turn
+       */
+      const stopWorkflow = async () => {
+        if (stoppingRef.current) return;
+        stoppingRef.current = true;
+        setStopping(true);
+        const wasWaitingOnly = !sessionRunning && !runTriggeringRef.current
+          && !Object.values(statusById).some((s) => s === 'running');
+        // Resolved lazily rather than via hard `inject` so missing namespaces on older hosts never block plugin load.
+        const resolveRemoteSubagents = () => {
+          try {
+            if (hostCtx && typeof hostCtx.get === 'function') {
+              const svc = hostCtx.get('remote.subagents');
+              if (svc) return svc;
+            }
+          } catch (_e) { /* absent */ }
+          try {
+            return (hostCtx && hostCtx.remote && hostCtx.remote.subagents) || null;
+          } catch (_e) {
+            return null;
+          }
+        };
+        try {
+          const runningChildIds = new Set();
+          try {
+            const sessions = hostCtx && hostCtx.sessions;
+            if (sessions && sessionId && sessions.list && typeof sessions.list.getSnapshot === 'function') {
+              const snap = sessions.list.getSnapshot();
+              const proj = snap && snap.projectionsBySession && snap.projectionsBySession[sessionId];
+              const catalog = proj && proj.values && proj.values.subagentCatalog;
+              if (Array.isArray(catalog)) {
+                for (const entry of catalog) {
+                  if (!entry || !entry.id) continue;
+                  const child = snap.byId && snap.byId[entry.id];
+                  if (child && child.running) runningChildIds.add(String(entry.id));
+                }
+              }
+            }
+          } catch (_e) { /* ignore */ }
+          for (const [nid, st] of Object.entries(statusById)) {
+            if (st === 'running' && runsById[nid] && runsById[nid].childId) {
+              runningChildIds.add(String(runsById[nid].childId));
+            }
+          }
+
+          const face = sessionFace(sessionId);
+          const tasks = [];
+
+          // 1) Fire `/canvas-stop` immediately (runs concurrently even while a turn is active).
+          if (face && typeof face.command === 'function') {
+            tasks.push(Promise.resolve().then(() => face.command('/canvas-stop')).catch(() => {}));
+          }
+
+          // 2) Interrupt every running child subagent via `remote.subagents.interruptByUser(childId)`.
+          const remoteSub = resolveRemoteSubagents();
+          if (remoteSub && typeof remoteSub.interruptByUser === 'function') {
+            for (const cid of runningChildIds) {
+              tasks.push(Promise.resolve().then(() => remoteSub.interruptByUser(cid)).catch(() => {}));
+            }
+          }
+
+          // 3) Cancel the running root session turn (never call session.cancel on subagents).
+          if (sessionRunning || runTriggeringRef.current) {
+            if (face && typeof face.cancel === 'function') {
+              tasks.push(Promise.resolve().then(() => face.cancel()).catch(() => {}));
+            } else {
+              const remoteSess = hostCtx && hostCtx.remote && hostCtx.remote.session;
+              if (remoteSess && typeof remoteSess.cancel === 'function' && sessionId) {
+                tasks.push(Promise.resolve().then(() => remoteSess.cancel({ sessionId })).catch(() => {}));
+              }
+            }
+          }
+
+          await Promise.all(tasks);
+          runTriggeringRef.current = false;
+          setRunTriggering(false);
+          setRunState((prev) => ({
+            ...(prev || {}),
+            status: 'halted',
+            waitingLead: null,
+          }));
+          setStatusById((prev) => {
+            const next = {};
+            for (const [k, v] of Object.entries(prev || {})) {
+              if (v !== 'running') next[k] = v;
+            }
+            return next;
+          });
+          flash(wasWaitingOnly ? t('stopWaitingDone') : t('stopSent'));
+        } catch (_err) {
+          flash(t('stopFailed'));
+        } finally {
+          stoppingRef.current = false;
+          setStopping(false);
         }
       };
 
@@ -2793,7 +3038,8 @@ window.__ModuleLoader__.load({
             if (child && child.running) {
               if (entry.id) staleChildIds.current.delete(entry.id);
               nextStatus[nodeId] = 'running';
-            } else if (!entry.id || !staleChildIds.current.has(entry.id)) {
+            } else if (nextStatus[nodeId] !== 'running' && (!entry.id || !staleChildIds.current.has(entry.id))) {
+              // Keep 'running' sticky across catalog entries so prior retry rounds never mask an active child.
               if (timing && timing.lastTurnCompleted === false) nextStatus[nodeId] = 'failed';
               else nextStatus[nodeId] = 'done';
             }
@@ -2881,7 +3127,7 @@ window.__ModuleLoader__.load({
           return null;
         };
         const onWheel = (e) => {
-          if (!e.deltaY) return;
+          if (!e.deltaY || zoomScrubbing.current) return;
           if (!e.ctrlKey && findScrollableChild(e.target, e.deltaY)) return;
           e.preventDefault();
           absorbScroll();
@@ -2956,6 +3202,7 @@ window.__ModuleLoader__.load({
         const startX = e.clientX;
         const startView = { ...viewRef.current };
         let moved = false;
+        zoomScrubbing.current = true;
         const prevCursor = typeof document !== 'undefined' && document.body ? document.body.style.cursor : '';
         const onMove = (ev) => {
           const dx = ev.clientX - startX;
@@ -2967,13 +3214,20 @@ window.__ModuleLoader__.load({
           commitView(scrubZoom(startView, cx, cy, dx));
         };
         const onUp = () => {
+          zoomScrubbing.current = false;
           window.removeEventListener('mousemove', onMove);
           window.removeEventListener('mouseup', onUp);
+          window.removeEventListener('blur', onBlurScrub);
           if (typeof document !== 'undefined' && document.body) document.body.style.cursor = prevCursor;
           if (!moved) focusLead(1);
         };
+        const onBlurScrub = () => {
+          moved = true;
+          onUp();
+        };
         window.addEventListener('mousemove', onMove);
         window.addEventListener('mouseup', onUp);
+        window.addEventListener('blur', onBlurScrub);
       };
 
       /** Zoom and pan so every node sits comfortably inside the viewport. */
@@ -2994,12 +3248,15 @@ window.__ModuleLoader__.load({
           if (n.y + nh > maxY) maxY = n.y + nh;
         }
         if (!Number.isFinite(minX)) return;
+        const hasLoopEdges = edgesRef.current.some((e) => e && e.loop === true);
+        const isTB = directionRef.current === 'tb';
         const cw = el.clientWidth || 1;
         const chh = el.clientHeight || 1;
-        const padX = 36;
-        const padTop = 44;
+        const padLeft = 36;
+        const padRight = hasLoopEdges && isTB ? 84 : 36;
+        const padTop = hasLoopEdges && !isTB ? 78 : 44;
         const padBottom = 36;
-        const availW = Math.max(80, cw - padX * 2);
+        const availW = Math.max(80, cw - padLeft - padRight);
         const availH = Math.max(80, chh - padTop - padBottom);
         const bw = Math.max(NODE_W, maxX - minX);
         const bh = Math.max(NODE_H, maxY - minY);
@@ -3010,7 +3267,7 @@ window.__ModuleLoader__.load({
         el.scrollTop = 0;
         commitView({
           k,
-          x: cw / 2 - (cx + WORLD_PAD) * k,
+          x: padLeft + (cw - padLeft - padRight) / 2 - (cx + WORLD_PAD) * k,
           y: padTop + (chh - padTop - padBottom) / 2 - (cy + WORLD_PAD) * k,
         });
       };
@@ -3033,7 +3290,11 @@ window.__ModuleLoader__.load({
 
       // Snapshot before every structural change so a mis-click can be undone/redone.
       const pushSnapshot = () => {
-        historyRef.current.push({ nodes: nodesRef.current, edges: edgesRef.current });
+        historyRef.current.push({
+          nodes: nodesRef.current,
+          edges: edgesRef.current,
+          direction: directionRef.current,
+        });
         if (historyRef.current.length > 50) historyRef.current.shift();
         redoRef.current = [];
       };
@@ -3041,8 +3302,16 @@ window.__ModuleLoader__.load({
       const undo = () => {
         const prev = historyRef.current.pop();
         if (!prev) { flash(t('undoNone')); return; }
-        redoRef.current.push({ nodes: nodesRef.current, edges: edgesRef.current });
+        redoRef.current.push({
+          nodes: nodesRef.current,
+          edges: edgesRef.current,
+          direction: directionRef.current,
+        });
         if (redoRef.current.length > 50) redoRef.current.shift();
+        if (prev.direction === 'tb' || prev.direction === 'lr') {
+          directionRef.current = prev.direction;
+          setDirection(prev.direction);
+        }
         setNodes(prev.nodes);
         setEdges(prev.edges);
         setSelectedIds([]);
@@ -3052,8 +3321,16 @@ window.__ModuleLoader__.load({
       const redo = () => {
         const next = redoRef.current.pop();
         if (!next) { flash(t('redoNone')); return; }
-        historyRef.current.push({ nodes: nodesRef.current, edges: edgesRef.current });
+        historyRef.current.push({
+          nodes: nodesRef.current,
+          edges: edgesRef.current,
+          direction: directionRef.current,
+        });
         if (historyRef.current.length > 50) historyRef.current.shift();
+        if (next.direction === 'tb' || next.direction === 'lr') {
+          directionRef.current = next.direction;
+          setDirection(next.direction);
+        }
         setNodes(next.nodes);
         setEdges(next.edges);
         setSelectedIds([]);
@@ -3393,11 +3670,13 @@ window.__ModuleLoader__.load({
 
       const toggleDirection = () => {
         const nextDir = directionRef.current === 'tb' ? 'lr' : 'tb';
-        setDirection(nextDir);
         const curNodes = nodesRef.current;
         const curEdges = edgesRef.current;
+        if (curNodes.length) pushSnapshot();
+        directionRef.current = nextDir;
+        setDirection(nextDir);
+        saveDefaultDirection(nextDir);
         if (curNodes.length) {
-          pushSnapshot();
           const next = layoutGraph(curNodes, curEdges, nextDir);
           setNodes(next);
           setTimeout(() => fitView(next), 0);
@@ -3431,7 +3710,7 @@ window.__ModuleLoader__.load({
           const { runs: _runs, ...rest } = n;
           return rest;
         });
-        const text = JSON.stringify({ nodes: cleanNodes, edges: edgesRef.current }, null, 2);
+        const text = JSON.stringify({ nodes: cleanNodes, edges: edgesRef.current, direction: directionRef.current }, null, 2);
         const fallbackCopy = () => {
           try {
             const ta = document.createElement('textarea');
@@ -3588,8 +3867,12 @@ window.__ModuleLoader__.load({
         if (current.length <= 2) return;
         pushSnapshot();
         const next = current.filter((b) => b.id !== branchId);
-        updateNode(node.id, { branches: next });
-        setEdges((es) => es.filter((e) => !(e.from === node.id && e.branch === branchId)));
+        const nextNodes = nodesRef.current.map((n) => (n.id === node.id ? { ...n, branches: next } : n));
+        const remainingEdges = edgesRef.current.filter((e) => !(e.from === node.id && e.branch === branchId));
+        const { edges: cleaned } = pruneInvalidLoopEdges(nextNodes, remainingEdges);
+        setNodes(nextNodes);
+        setEdges(cleaned);
+        setLoopEditEdgeId(null);
       };
 
       const onOutputDown = (e, id, type, branch) => {
@@ -3727,8 +4010,7 @@ window.__ModuleLoader__.load({
           ev.preventDefault();
           ev.stopPropagation();
           try { window.getSelection().removeAllRanges(); } catch (_sel) { /* ignore */ }
-          const cur = viewRef.current;
-          panDrag.current = { startX: ev.clientX, startY: ev.clientY, originX: cur.x, originY: cur.y };
+          panDrag.current = { lastX: ev.clientX, lastY: ev.clientY };
           setPanning(true);
           setDragging(true);
         };
@@ -3894,11 +4176,27 @@ window.__ModuleLoader__.load({
         if (!dragging) return undefined;
         const move = (ev) => onCanvasMove(ev);
         const up = (ev) => onCanvasUp(ev);
+        const cancelDrag = () => {
+          panDrag.current = null;
+          nodeDrag.current = null;
+          rightClickRef.current = null;
+          cutRef.current = null;
+          cutHits.current = new Set();
+          pendingHandledRef.current = false;
+          setPanning(false);
+          setCutPath([]);
+          setCutVictims([]);
+          setMarquee(null);
+          setPending(null);
+          setDragging(false);
+        };
         window.addEventListener('mousemove', move);
         window.addEventListener('mouseup', up);
+        window.addEventListener('blur', cancelDrag);
         return () => {
           window.removeEventListener('mousemove', move);
           window.removeEventListener('mouseup', up);
+          window.removeEventListener('blur', cancelDrag);
         };
       }, [dragging, marquee, pending]);
 
@@ -3931,10 +4229,9 @@ window.__ModuleLoader__.load({
 
       const onCanvasMove = (e) => {
         if (panDrag.current) {
-          const pan = panDrag.current;
-          const dx = e.clientX - pan.startX;
-          const dy = e.clientY - pan.startY;
-          commitView({ k: viewRef.current.k, x: pan.originX + dx, y: pan.originY + dy });
+          const stepped = applyPanStep(viewRef.current, panDrag.current, e.clientX, e.clientY);
+          panDrag.current = stepped.pan;
+          commitView(stepped.view);
           return;
         }
         if (rightClickRef.current && !rightClickRef.current.moved) {
@@ -3953,7 +4250,11 @@ window.__ModuleLoader__.load({
           const drag = nodeDrag.current;
           const dx = p.x - drag.startX;
           const dy = p.y - drag.startY;
-          if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) drag.moved = true;
+          // Snapshot once on first actual move (>0.5px) so pure selection clicks do not pollute undo history.
+          if (!drag.moved && (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5)) {
+            pushSnapshot();
+            drag.moved = true;
+          }
           const byId = new Map(drag.origins.map((o) => [o.id, o]));
           setNodes((ns) => ns.map((n) => {
             const origin = byId.get(n.id);
@@ -4105,11 +4406,22 @@ window.__ModuleLoader__.load({
       const savePresetNow = () => {
         const name = presetName.trim();
         if (!name) { flash(t('needName')); return; }
-        if (Object.prototype.hasOwnProperty.call(presets, name)) {
+        const latest = loadPresets();
+        if (Object.prototype.hasOwnProperty.call(latest, name)) {
+          setPresets(latest);
           flash('"' + name + '" ' + t('dupName'));
           return;
         }
-        const next = { ...presets, [name]: { nodes, edges } };
+        const savedNodes = nodesRef.current.map((n) => ({
+          ...n,
+          ...(Array.isArray(n.refs) ? { refs: n.refs.slice() } : null),
+          ...(Array.isArray(n.branches) ? { branches: n.branches.map((b) => ({ ...b })) } : null),
+        }));
+        const savedEdges = edgesRef.current.map((e) => ({ ...e }));
+        const next = {
+          ...latest,
+          [name]: { nodes: savedNodes, edges: savedEdges, direction: directionRef.current },
+        };
         if (!savePresets(next)) { flash(t('saveFailed')); return; }
         setPresets(next);
         setPresetName('');
@@ -4130,6 +4442,12 @@ window.__ModuleLoader__.load({
         }
         if (typeof doc.enabled === 'boolean') {
           setEnabled(doc.enabled);
+        }
+        const hasExplicitDir = !merge && (doc.direction === 'tb' || doc.direction === 'lr');
+        const allHaveCoords = !merge && doc.nodes.every((n) => n && typeof n.x === 'number' && typeof n.y === 'number');
+        if (hasExplicitDir) {
+          directionRef.current = doc.direction;
+          setDirection(doc.direction);
         }
         const removedNodes = new Set(doc.removeNodes || []);
         const rawIncomingEdges = Array.isArray(doc.edges) ? doc.edges : [];
@@ -4172,10 +4490,19 @@ window.__ModuleLoader__.load({
               addedCount += 1;
             }
             placed.set(n.id, { x, y });
+            if (merge && fromRemote) {
+              // Host merge patches deliver complete canonical node fields; explicitly clear
+              // optional fields that were deleted by `canvas_patch` while keeping visual state.
+              const merged = { ...prev, ...n, x, y };
+              if (!('refs' in n)) delete merged.refs;
+              if (!('branches' in n)) delete merged.branches;
+              if (!('multiMatch' in n)) delete merged.multiMatch;
+              return merged;
+            }
             return { ...prev, ...n, x, y };
           });
           if (!merge) {
-            return isTB ? layoutGraph(incoming, rawIncomingEdges, 'tb') : incoming;
+            return (isTB && !(hasExplicitDir && allHaveCoords)) ? layoutGraph(incoming, rawIncomingEdges, 'tb') : incoming;
           }
           const touched = new Set(incoming.map((n) => n.id));
           const kept = existing
@@ -4358,20 +4685,31 @@ window.__ModuleLoader__.load({
       };
 
       const applyPreset = (name) => {
-        const preset = presets[name];
+        const latest = loadPresets();
+        const preset = latest[name] || presets[name];
         if (!preset || !Array.isArray(preset.nodes) || !Array.isArray(preset.edges)) { flash(t('invalidPreset')); return; }
+        const clonedNodes = preset.nodes.map((n) => ({
+          ...n,
+          ...(Array.isArray(n.refs) ? { refs: n.refs.slice() } : null),
+          ...(Array.isArray(n.branches) ? { branches: n.branches.map((b) => ({ ...b })) } : null),
+        }));
+        const clonedEdges = preset.edges.map((e) => ({ ...e }));
         pushSnapshot();
+        if (preset.direction === 'tb' || preset.direction === 'lr') {
+          directionRef.current = preset.direction;
+          setDirection(preset.direction);
+        }
         if (enabled) {
           skipDirtyOnce.current = true;
-          pushPlan(true, preset.nodes, preset.edges);
+          pushPlan(true, clonedNodes, clonedEdges);
         }
-        setNodes(preset.nodes);
-        setEdges(preset.edges);
+        setNodes(clonedNodes);
+        setEdges(clonedEdges);
         setSelectedIds([]);
         snapshotStaleCatalog();
         setRunsById({});
         setPresetOpen(null);
-        setTimeout(() => fitView(preset.nodes), 0);
+        setTimeout(() => fitView(clonedNodes), 0);
         flash(t('loadedPreset') + ': ' + name);
       };
 
@@ -4395,7 +4733,8 @@ window.__ModuleLoader__.load({
       };
 
       const deletePreset = (name) => {
-        const next = { ...presets };
+        const latest = loadPresets();
+        const next = { ...latest };
         delete next[name];
         savePresets(next);
         setPresets(next);
@@ -4427,12 +4766,6 @@ window.__ModuleLoader__.load({
         const hit = modelEntry(node);
         const ids = ((hit && hit.efforts) || []).map((e) => e.id);
         return ['', ...(ids.length ? ids : REASONING_FALLBACK)];
-      };
-      const reasoningLabel = (node) => {
-        if (!node.reasoning) return t('defaultEffort');
-        const hit = modelEntry(node);
-        const found = hit && hit.efforts ? hit.efforts.find((e) => e.id === node.reasoning) : undefined;
-        return (found && (found.name || found.id)) || node.reasoning;
       };
 
       const scopeToggle = (node) => {
@@ -4671,50 +5004,31 @@ window.__ModuleLoader__.load({
       const soloLeadIds = soloLeadNodeIds(nodes, edges);
       const deadEndIds = deadEndNodeIds(nodes, edges);
 
-      // Lead nodes are never spawned, so their status is derived from graph state:
-      // - Intermediate Lead (has downstream): glows "Ready" until any child starts,
-      //   then settles to "Done".
-      // - Terminal Lead (no downstream): Host finishes in one shot, so it glows only
-      //   while the main conversation is still streaming (`sessionRunning`), then
-      //   settles to "Done" once the turn ends.
-      const leadReadyIds = new Set();
-      const leadDoneIds = new Set();
-      const hasCondNode = nodes.some((x) => x.kind === 'condition');
-      if (enabled) {
-        if (runState && runState.waitingLead && runState.waitingLead.id) {
-          leadReadyIds.add(runState.waitingLead.id);
-        }
-        if (runState && Array.isArray(runState.done)) {
-          for (const did of runState.done) {
-            const dn = nodeById.get(did);
-            if (dn && dn.kind === 'lead' && dn.id !== 'lead') leadDoneIds.add(did);
-          }
-        }
-        for (const n of nodes) {
-          if (n.kind !== 'lead' || n.id === 'lead' || !reachableIds.has(n.id)) continue;
-          if (leadReadyIds.has(n.id) || leadDoneIds.has(n.id)) continue;
-          const upIds = edges
-            .filter((e) => e.to === n.id && e.from !== 'lead' && nodeById.has(e.from))
-            .map((e) => e.from);
-          if (!upIds.length) continue;
-          const upAgents = upIds.filter((id) => nodeById.get(id).kind !== 'lead');
-          if (!upAgents.length) continue;
-          const anyUpRunning = upAgents.some((id) => statusById[id] === 'running');
-          const allUpDone = hasCondNode
-            ? (!anyUpRunning && upAgents.some((id) => statusById[id] === 'done' || statusById[id] === 'failed'))
-            : upAgents.every((id) => statusById[id] === 'done' || statusById[id] === 'failed');
-          if (!allUpDone) continue;
-          const downIds = edges.filter((e) => e.from === n.id).map((e) => e.to);
-          if (!downIds.length) {
-            if (sessionRunning) leadReadyIds.add(n.id);
-            else leadDoneIds.add(n.id);
-          } else {
-            const anyDownStarted = downIds.some((id) => Boolean(statusById[id]));
-            if (!anyDownStarted) leadReadyIds.add(n.id);
-            else leadDoneIds.add(n.id);
-          }
-        }
-      }
+      // Lead nodes are never spawned, so their status is derived via `deriveLeadStatuses`,
+      // honoring authoritative backend `runState.status` (`halted` / `done` / `need-lead`).
+      const { leadReadyIds, leadDoneIds } = deriveLeadStatuses({
+        enabled,
+        nodes,
+        edges,
+        statusById,
+        sessionRunning,
+        runState,
+        reachableIds,
+      });
+      const activeWaitingLead = runState
+        ? (runState.waitingLead || null)
+        : (leadReadyIds.size > 0 ? { id: Array.from(leadReadyIds)[0] } : null);
+      const runningNodesCount = enabled
+        ? Object.values(statusById).filter((s) => s === 'running').length
+        : 0;
+      const stopBtn = stopButtonState({
+        sessionRunning,
+        runningNodesCount,
+        waitingLead: activeWaitingLead,
+        triggering: runTriggering,
+        stopping,
+        lang,
+      });
 
       const decisionsById = (enabled && runState && runState.decisions && typeof runState.decisions === 'object')
         ? runState.decisions
@@ -5146,6 +5460,39 @@ window.__ModuleLoader__.load({
           h('button', { style: S.btn, onClick: () => addNode('lead'), type: 'button' }, t('addLead')),
           h('button', { style: S.btn, onClick: () => addNode('condition'), type: 'button' }, t('addCond')),
           h('span', { style: S.toolSep }),
+          (() => {
+            const canUndo = historyRef.current.length > 0;
+            const canRedo = redoRef.current.length > 0;
+            const undoHint = shortcuts.undo ? (' (' + shortcuts.undo + ')') : '';
+            const redoHint = shortcuts.redo ? (' (' + shortcuts.redo + ')') : '';
+            return h(React.Fragment, null,
+              h('button', {
+                style: {
+                  ...S.btn,
+                  padding: '4px 6px',
+                  opacity: canUndo ? 1 : 0.42,
+                  cursor: canUndo ? 'pointer' : 'default',
+                },
+                disabled: !canUndo,
+                onClick: undo,
+                type: 'button',
+                title: t('tipUndo') + undoHint,
+              }, '↶'),
+              h('button', {
+                style: {
+                  ...S.btn,
+                  padding: '4px 6px',
+                  opacity: canRedo ? 1 : 0.42,
+                  cursor: canRedo ? 'pointer' : 'default',
+                },
+                disabled: !canRedo,
+                onClick: redo,
+                type: 'button',
+                title: t('tipRedo') + redoHint,
+              }, '↷'),
+            );
+          })(),
+          h('span', { style: S.toolSep }),
           h('button', {
             style: enabled && dirty ? S.btnDirty : S.btn,
             onClick: () => pushPlan(enabled),
@@ -5171,8 +5518,11 @@ window.__ModuleLoader__.load({
                 onClick: (e) => {
                   const next = presetOpen === 'menu' ? null : 'menu';
                   if (next) {
+                    refreshPresets(false);
                     setMenuOpen(false);
                     setCtxMenu(null);
+                    setLoopEditEdgeId(null);
+                    setOpenModelFor(null);
                     const rootRect = rootElRef.current && rootElRef.current.getBoundingClientRect();
                     const btnRect = e.currentTarget && e.currentTarget.getBoundingClientRect();
                     setPresetAlign(dropdownAlign(btnRect, rootRect, 248));
@@ -5219,17 +5569,45 @@ window.__ModuleLoader__.load({
                   onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
                   onClick: () => clearCanvas(),
                 }, h('span', { style: S.presetRowText }, t('newBlankCanvas'))),
-                h('div', { style: S.menuHead }, t('myPresets')),
-                names.length
-                  ? names.map((name) => h('div', {
-                      key: name,
-                      style: S.presetRow,
-                      onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
-                      onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+                h('div', {
+                  style: { ...S.menuHead, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px' },
+                },
+                  h('span', null, t('myPresets')),
+                  h('button', {
+                    type: 'button',
+                    title: t('refreshPresetsTip'),
+                    style: {
+                      padding: '0 4px', borderRadius: '4px', border: '1px solid ' + C.border,
+                      background: 'transparent', color: C.dim, fontSize: '10px', lineHeight: '14px',
+                      cursor: 'pointer', flex: '0 0 auto',
                     },
-                      h('span', { style: S.presetRowText, onClick: () => applyPreset(name) }, name),
-                      h('button', { style: S.presetDel, type: 'button', title: t('del'), onClick: () => deletePreset(name) }, '×'),
-                    ))
+                    onMouseEnter: (e) => { e.currentTarget.style.color = C.text; e.currentTarget.style.borderColor = C.accent; },
+                    onMouseLeave: (e) => { e.currentTarget.style.color = C.dim; e.currentTarget.style.borderColor = C.border; },
+                    onClick: (e) => { e.stopPropagation(); refreshPresets(true); },
+                  }, '↻'),
+                ),
+                names.length
+                  ? names.map((name) => {
+                      const pItem = presets[name];
+                      const pDir = pItem && (pItem.direction === 'tb' || pItem.direction === 'lr') ? pItem.direction : '';
+                      return h('div', {
+                        key: name,
+                        style: S.presetRow,
+                        onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+                        onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+                      },
+                        h('span', { style: S.presetRowText, onClick: () => applyPreset(name) }, name),
+                        pDir && h('span', {
+                          style: {
+                            flex: '0 0 auto', fontSize: '9px', lineHeight: '13px',
+                            padding: '0 4px', borderRadius: '3px',
+                            border: '1px solid ' + C.border, color: C.dim,
+                          },
+                          title: pDir === 'tb' ? t('dirTB') : t('dirLR'),
+                        }, pDir === 'tb' ? t('presetDirTB') : t('presetDirLR')),
+                        h('button', { style: S.presetDel, type: 'button', title: t('del'), onClick: () => deletePreset(name) }, '×'),
+                      );
+                    })
                   : h('div', { style: S.presetEmpty }, t('presetEmpty')),
                 h('div', { style: S.menuHead }, t('builtinTemplates')),
                 templates.map((tpl) => h('div', {
@@ -5252,6 +5630,8 @@ window.__ModuleLoader__.load({
                   if (next) {
                     setPresetOpen(null);
                     setCtxMenu(null);
+                    setLoopEditEdgeId(null);
+                    setOpenModelFor(null);
                     const rootRect = rootElRef.current && rootElRef.current.getBoundingClientRect();
                     const btnRect = e.currentTarget && e.currentTarget.getBoundingClientRect();
                     setMenuAlign(dropdownAlign(btnRect, rootRect, 204));
@@ -5483,31 +5863,45 @@ window.__ModuleLoader__.load({
             if (tag !== 'INPUT' && tag !== 'TEXTAREA') e.preventDefault();
           },
         },
-          h('button', {
-            style: enabled
-              ? {
-                  ...S.floatOn,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  lineHeight: '14px',
-                  boxShadow: fxLevel === 'vivid'
-                    ? '0 0 14px rgba(47,129,247,0.35), 0 4px 14px rgba(0,0,0,0.35)'
-                    : S.floatOn.boxShadow,
-                }
-              : { ...S.floatOff, display: 'inline-flex', alignItems: 'center', gap: '6px', lineHeight: '14px' },
-            type: 'button',
-            onMouseDown: (e) => e.stopPropagation(),
-            onClick: toggleEnabled,
-            title: t('tipToggle'),
-          },
-            h('span', {
-              className: enabled && fxLevel === 'vivid' ? 'dsh-wc-dot-live' : undefined,
+          h('div', { style: S.floatTopLeft, onMouseDown: (e) => e.stopPropagation() },
+            h('button', {
               style: enabled
-                ? { width: '7px', height: '7px', borderRadius: '50%', background: C.accent, flex: '0 0 auto' }
-                : { width: '7px', height: '7px', borderRadius: '50%', border: '1.5px solid ' + C.dim, boxSizing: 'border-box', flex: '0 0 auto' },
-            }),
-            h('span', null, (enabled ? t('enabled') : t('disabled')).replace(/^[●○]\s*/, '')),
+                ? {
+                    ...S.floatOn,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    lineHeight: '14px',
+                    boxShadow: fxLevel === 'vivid'
+                      ? '0 0 14px rgba(47,129,247,0.35), 0 4px 14px rgba(0,0,0,0.35)'
+                      : S.floatOn.boxShadow,
+                  }
+                : { ...S.floatOff, display: 'inline-flex', alignItems: 'center', gap: '6px', lineHeight: '14px' },
+              type: 'button',
+              onClick: toggleEnabled,
+              title: t('tipToggle'),
+            },
+              h('span', {
+                className: enabled && fxLevel === 'vivid' ? 'dsh-wc-dot-live' : undefined,
+                style: enabled
+                  ? { width: '7px', height: '7px', borderRadius: '50%', background: C.accent, flex: '0 0 auto' }
+                  : { width: '7px', height: '7px', borderRadius: '50%', border: '1.5px solid ' + C.dim, boxSizing: 'border-box', flex: '0 0 auto' },
+              }),
+              h('span', null, (enabled ? t('enabled') : t('disabled')).replace(/^[●○]\s*/, '')),
+            ),
+            stopBtn.visible && h('button', {
+              type: 'button',
+              disabled: stopBtn.disabled,
+              style: {
+                ...S.floatStop,
+                opacity: stopBtn.disabled ? 0.6 : 1,
+                cursor: stopBtn.disabled ? 'not-allowed' : 'pointer',
+              },
+              title: stopBtn.title,
+              onMouseEnter: (e) => { if (!stopBtn.disabled) e.currentTarget.style.background = 'rgba(229,83,75,0.18)'; },
+              onMouseLeave: (e) => { e.currentTarget.style.background = C.elevated; },
+              onClick: () => { if (!stopBtn.disabled) stopWorkflow(); },
+            }, stopBtn.label),
           ),
           addMenu && (() => {
             const lf = addMenu.linkFrom || null;
@@ -5801,17 +6195,6 @@ window.__ModuleLoader__.load({
               const isEntry = node.id === 'lead';
               const isLeadKind = node.kind === 'lead';
               const isCondKind = node.kind === 'condition';
-              const roleInput = (style) => h('div', { style },
-                h('span', { style: S.fieldLabel }, t('role')),
-                h('input', {
-                  style: S.input,
-                  value: node.role || '',
-                  placeholder: isLeadKind ? t('rolePhLead') : t('rolePhAgent'),
-                  onMouseDown: (e) => e.stopPropagation(),
-                  onFocus: () => setSelectedIds([node.id]),
-                  onChange: (e) => updateNode(node.id, { role: e.target.value }),
-                }),
-              );
               const isOrphan = node.id !== 'lead' && !reachableIds.has(node.id);
               const isSoloLead = soloLeadIds.has(node.id);
               const isDeadEnd = deadEndIds.has(node.id);
@@ -5849,9 +6232,15 @@ window.__ModuleLoader__.load({
               const nodeAttempt = nodeAttemptsMap[node.id] || null;
               const condDecision = isCondKind ? (decisionsById[node.id] || null) : null;
               const verdictInfo = condDecision ? conditionVerdictSummary(condDecision, lang) : null;
+              // Lift the whole card to zIndex 40 while any popover or dropdown is open so
+              // later-DOM cards below (especially in vertical layout) and loop pills never paint over it.
               const hasOpenPopover = decisionViewFor === node.id
                 || refsEditFor === node.id
                 || roleEditFor === node.id
+                || openModelFor === node.id
+                || openModelFor === ('r:' + node.id)
+                || openModelFor === ('f:' + node.id)
+                || openModelFor === ('m:' + node.id)
                 || (typeof roleEditFor === 'string' && roleEditFor.includes(':' + node.id + ':'));
               return h('div', {
                 key: node.id,
@@ -5892,14 +6281,11 @@ window.__ModuleLoader__.load({
                 h('div', { style: S.bandDivider }),
                 isEntry
                   ? (() => {
-                      const waitingLead = runState
-                        ? (runState.waitingLead || null)
-                        : (leadReadyIds.size > 0 ? { id: Array.from(leadReadyIds)[0] } : null);
                       const btn = entryRunButtonState({
                         enabled,
                         task: node.task || '',
                         sessionRunning,
-                        waitingLead,
+                        waitingLead: activeWaitingLead,
                         triggering: runTriggering,
                         lang,
                       });
@@ -5913,35 +6299,67 @@ window.__ModuleLoader__.load({
                       const borderColor = isReady
                         ? 'rgba(63,185,80,0.6)'
                         : (isRun ? 'rgba(47,129,247,0.6)' : (isWait ? 'rgba(210,153,34,0.6)' : C.border));
-                      return h('button', {
-                        type: 'button',
-                        disabled: btn.disabled,
+                      const bottomOffset = direction === 'tb' ? '28px' : '4px';
+                      return h('div', {
                         style: {
-                          ...S.statusBtn,
-                          bottom: direction === 'tb' ? '28px' : '4px',
-                          color,
-                          background: bg,
-                          borderColor,
-                          opacity: btn.state === 'disabled' ? 0.55 : 1,
-                          cursor: btn.disabled ? 'not-allowed' : 'pointer',
-                          fontWeight: isReady ? 600 : 500,
+                          position: 'absolute',
+                          left: '10px',
+                          bottom: bottomOffset,
+                          zIndex: 7,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '4px',
                         },
-                        title: btn.title,
                         onMouseDown: (e) => e.stopPropagation(),
-                        onMouseEnter: (e) => { if (!btn.disabled) e.currentTarget.style.background = 'rgba(63,185,80,0.24)'; },
-                        onMouseLeave: (e) => { e.currentTarget.style.background = bg; },
-                        onClick: (e) => { e.stopPropagation(); if (!btn.disabled) runFromEntry(); },
                       },
-                        isRun && h('span', {
-                          className: fxLevel !== 'minimal' ? 'dsh-wc-dot-live' : undefined,
-                          style: { width: '6px', height: '6px', borderRadius: '50%', background: color, flex: '0 0 auto' },
-                        }),
-                        btn.label,
+                        h('button', {
+                          type: 'button',
+                          disabled: btn.disabled,
+                          style: {
+                            ...S.statusBtn,
+                            position: 'static',
+                            color,
+                            background: bg,
+                            borderColor,
+                            opacity: btn.state === 'disabled' ? 0.55 : 1,
+                            cursor: btn.disabled ? 'not-allowed' : 'pointer',
+                            fontWeight: isReady ? 600 : 500,
+                          },
+                          title: btn.title,
+                          onMouseEnter: (e) => { if (!btn.disabled) e.currentTarget.style.background = 'rgba(63,185,80,0.24)'; },
+                          onMouseLeave: (e) => { e.currentTarget.style.background = bg; },
+                          onClick: (e) => { e.stopPropagation(); if (!btn.disabled) runFromEntry(); },
+                        },
+                          isRun && h('span', {
+                            className: fxLevel !== 'minimal' ? 'dsh-wc-dot-live' : undefined,
+                            style: { width: '6px', height: '6px', borderRadius: '50%', background: color, flex: '0 0 auto' },
+                          }),
+                          btn.label,
+                        ),
+                        stopBtn.visible && h('button', {
+                          type: 'button',
+                          disabled: stopBtn.disabled,
+                          style: {
+                            ...S.statusBtn,
+                            position: 'static',
+                            padding: '1px 5px',
+                            color: '#e5534b',
+                            background: 'rgba(229,83,75,0.14)',
+                            borderColor: 'rgba(229,83,75,0.65)',
+                            opacity: stopBtn.disabled ? 0.6 : 1,
+                            cursor: stopBtn.disabled ? 'not-allowed' : 'pointer',
+                            fontWeight: 600,
+                          },
+                          title: stopBtn.title,
+                          onMouseEnter: (e) => { if (!stopBtn.disabled) e.currentTarget.style.background = 'rgba(229,83,75,0.24)'; },
+                          onMouseLeave: (e) => { e.currentTarget.style.background = 'rgba(229,83,75,0.14)'; },
+                          onClick: (e) => { e.stopPropagation(); if (!stopBtn.disabled) stopWorkflow(); },
+                        }, stopBtn.disabled ? '…' : '⏹'),
                       );
                     })()
                   : isDeadEnd
                   ? h('div', {
-                      style: S.warnChip,
+                      style: { ...S.warnChip, bottom: (direction === 'tb' && !isCondKind) ? '28px' : '5px' },
                       title: t('tipDeadEnd'),
                       onMouseDown: (e) => e.stopPropagation(),
                     }, '⚠ ', t('stDeadEnd'))
@@ -6286,13 +6704,14 @@ window.__ModuleLoader__.load({
           scope.effect(() => scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({
             name: 'sidebar.right.pane.tab',
             key: TAB_ID,
-          }, (props) => h(CanvasBoundary, null, h(WorkflowCanvas, props)))), 'workflow-canvas: tab body');
+            // Key by sessionId so keepMounted reuse across session switches can never overwrite another session's storage.
+          }, (props) => h(CanvasBoundary, null, h(WorkflowCanvas, { ...props, key: (props && props.sessionId) || '__global__' })))), 'workflow-canvas: tab body');
         });
         } catch (error) {
           try { console.error('[workflow-canvas] apply failed', error); } catch (_e) { /* ignore */ }
         }
       },
-      __test: { topoOrder, wouldCycle, soloLeadNodeIds, layoutGraph, builtinTemplates, deadEndNodeIds, nextEffectLevel, nextMaxParallel, dropdownAlign, zoomAroundPoint, scrubZoom, buildPlan, loadDoc, saveDoc, storageKey, socketCenterY, nodeHeight, conditionBranchesForUI, distanceToEdge, edgeCurve, compatibleTargetsForWire, conditionVerdictSummary, entryRunButtonState, outputSocketX, inputSocketPos, outputSocketPos, normalizeRefsUI, clampMenuPos, cloneSelection, nextSelectionOnNodeClick, DEFAULT_SHORTCUTS, normalizeShortcut, formatShortcutFromEvent, matchesShortcut, applyShortcutBinding, normalizeMaxIterationsUI, loopMemberIdsUI, loopGroupsForUI, pruneInvalidLoopEdges, canLinkAsLoop, analyzeLoopSelection, loopEdgeArc },
+      __test: { topoOrder, wouldCycle, soloLeadNodeIds, layoutGraph, builtinTemplates, deadEndNodeIds, nextEffectLevel, nextMaxParallel, dropdownAlign, zoomAroundPoint, scrubZoom, applyPanStep, normalizeDirection, loadDefaultDirection, saveDefaultDirection, loadPresets, savePresets, buildPlan, loadDoc, saveDoc, storageKey, socketCenterY, nodeHeight, conditionBranchesForUI, distanceToEdge, edgeCurve, compatibleTargetsForWire, conditionVerdictSummary, entryRunButtonState, stopButtonState, deriveLeadStatuses, outputSocketX, inputSocketPos, outputSocketPos, normalizeRefsUI, clampMenuPos, cloneSelection, nextSelectionOnNodeClick, DEFAULT_SHORTCUTS, normalizeShortcut, formatShortcutFromEvent, matchesShortcut, applyShortcutBinding, normalizeMaxIterationsUI, loopMemberIdsUI, loopGroupsForUI, pruneInvalidLoopEdges, canLinkAsLoop, analyzeLoopSelection, loopEdgeArc },
     };
   },
 });

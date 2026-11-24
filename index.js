@@ -24,6 +24,8 @@ import { fileURLToPath } from 'node:url';
 const canvasBySession = new Map();
 /** In-flight run progress per Session id. */
 const runBySession = new Map();
+/** Live AbortController & active child session ids per executing Session id. */
+const activeRunBySession = new Map();
 /** Snapshot of the last completed/halted run per Session id (enables partial retry). */
 const lastRunBySession = new Map();
 /**
@@ -161,8 +163,8 @@ function orderNodes(plan) {
   }
   const queue = nodes.filter((n) => indeg.get(n.id) === 0).map((n) => n.id);
   const out = [];
-  while (queue.length) {
-    const id = queue.shift();
+  for (let i = 0; i < queue.length; i += 1) {
+    const id = queue[i];
     out.push(byId.get(id));
     for (const next of adj.get(id)) {
       indeg.set(next, indeg.get(next) - 1);
@@ -557,6 +559,10 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
   }
 
   const run = async (childId, overridePrompt) => {
+    // Guard before every activation so an interrupted run can never spawn fresh/fallback zombies.
+    if (signal && signal.aborted) {
+      return { ok: false, empty: false, reason: 'aborted', text: '已取消', childId: '' };
+    }
     const baseSpec = overridePrompt
       ? { ...spec, prompt: [{ type: 'text', text: overridePrompt }] }
       : spec;
@@ -570,10 +576,13 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
     }
     try {
       if (activation && activation.childId) {
-        liveChild.set(childKey(node.id), activation.childId);
+        const cid = String(activation.childId);
+        liveChild.set(childKey(node.id), cid);
         // Only overwrite the persisted memory slot when Memory is ON, so a
         // temporary keepSession=false experiment never destroys saved memory.
-        if (node.keepSession) childByNode.set(childKey(node.id), activation.childId);
+        if (node.keepSession) childByNode.set(childKey(node.id), cid);
+        const activeRec = sid ? activeRunBySession.get(String(sid)) : null;
+        if (activeRec && activeRec.childIds) activeRec.childIds.add(cid);
       }
       let result;
       try {
@@ -595,6 +604,10 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
       }
       return outcome;
     } finally {
+      if (activation && activation.childId && sid) {
+        const activeRec = activeRunBySession.get(String(sid));
+        if (activeRec && activeRec.childIds) activeRec.childIds.delete(String(activation.childId));
+      }
       try { await activation.dispose(); } catch (_e) { /* ignore */ }
     }
   };
@@ -603,6 +616,7 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
   // resume its warm child session with a concise incremental correction prompt.
   if (warmPrompt && loopCtx && loopCtx.warmChildId && !forcedChild) {
     const continued = await run(loopCtx.warmChildId, warmPrompt);
+    if (signal && signal.aborted) return continued;
     if (continued.ok) {
       liveChild.set(childKey(node.id), continued.childId || loopCtx.warmChildId);
       return continued;
@@ -617,6 +631,7 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
   // step inside that child session instead of starting a fresh one.
   if (forcedChild) {
     const continued = await run(forcedChild);
+    if (signal && signal.aborted) return continued;
     if (continued.ok) {
       liveChild.set(childKey(node.id), forcedChild);
       return continued;
@@ -637,6 +652,7 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
     const previous = pinned || saved || inProcess;
     if (previous) {
       const resumed = await run(previous);
+      if (signal && signal.aborted) return resumed;
       if (resumed.ok) return resumed;
       if (resumed.reason === 'activation-failed') {
         if (previous === inProcess) liveChild.delete(childKey(node.id));
@@ -655,6 +671,9 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
 }
 
 async function spawnNode(scope, plan, node, results, parent, signal, sid, failedMap, prunedSet, loopCtx) {
+  if (signal && signal.aborted) {
+    return { ok: false, empty: false, reason: 'aborted', text: '已取消', childId: '' };
+  }
   const continueFrom = forwardEdgesOf(plan.edges || [])
     .filter((e) => e.to === node.id && e.type === 'session-ref' && !(prunedSet && prunedSet.has(e.from)))
     .map((e) => liveChild.get(String(sid || '') + '::' + e.from)
@@ -663,6 +682,7 @@ async function spawnNode(scope, plan, node, results, parent, signal, sid, failed
 
   if (continueFrom) {
     const continued = await spawnOnce(scope, plan, node, results, parent, signal, undefined, continueFrom, sid, failedMap, prunedSet, loopCtx);
+    if (signal && signal.aborted) return continued;
     if (continued.ok) {
       const out = { ok: true, empty: Boolean(continued.empty), text: continued.text + '\n（已在上游会话中继续）', childId: continued.childId || continueFrom };
       if (continued.decision) out.decision = continued.decision;
@@ -671,6 +691,7 @@ async function spawnNode(scope, plan, node, results, parent, signal, sid, failed
   }
 
   const first = await spawnOnce(scope, plan, node, results, parent, signal, undefined, undefined, sid, failedMap, prunedSet, loopCtx);
+  if (signal && signal.aborted) return first;
   if (first.ok) {
     const out = { ok: true, empty: Boolean(first.empty), text: first.text, childId: first.childId || '' };
     if (first.decision) out.decision = first.decision;
@@ -902,7 +923,7 @@ function normalizeCanvas(args) {
       provider: String(raw.provider || ''),
       model: String(raw.model || ''),
       reasoning: String(raw.reasoning || ''),
-      preset: String(raw.preset || ''),
+      preset: (id === 'lead' ? '' : (kind === 'condition' ? 'minimal' : String(raw.preset || ''))),
       structured: Boolean(raw.structured),
       keepSession: Boolean(raw.keepSession),
       fallbackModel: String(raw.fallbackModel || ''),
@@ -1038,6 +1059,7 @@ function applyPatch(plan, args) {
         if (patch[key] !== undefined) existing[key] = patch[key];
       }
       if (patch.kind !== undefined) existing.kind = normalizeKind(patch.kind);
+      if (existing.kind === 'condition') existing.preset = 'minimal';
       if (patch.branches !== undefined) {
         const nb = normalizeBranches(patch.branches);
         if (nb) existing.branches = nb;
@@ -1064,7 +1086,7 @@ function applyPatch(plan, args) {
       for (const key of ALLOWED) {
         if (patch[key] !== undefined) created[key] = patch[key];
       }
-      created.preset = created.preset === 'minimal' ? 'minimal' : 'standard';
+      created.preset = (created.kind === 'condition' || created.preset === 'minimal') ? 'minimal' : 'standard';
       if (created.kind === 'condition' && patch.branches !== undefined) {
         const nb = normalizeBranches(patch.branches);
         if (nb) created.branches = nb;
@@ -1157,9 +1179,18 @@ function applyPatch(plan, args) {
  * resolves a session's root from its header cwd, so the client reads the same
  * relative path back through the Remote.
  */
+function resolveSessionsService(scope) {
+  try {
+    return (scope && scope.sessions) || (scope && typeof scope.get === 'function' ? scope.get('sessions') : null);
+  } catch (_e) {
+    return null;
+  }
+}
+
 function publishCanvas(scope, sessionId, canvas) {
   try {
-    const live = scope && scope.sessions && scope.sessions.get(sessionId);
+    const sessionsSvc = resolveSessionsService(scope);
+    const live = sessionsSvc && typeof sessionsSvc.get === 'function' ? sessionsSvc.get(sessionId) : null;
     const root = live && live.header && live.header.cwd;
     if (!root) return false;
     const dir = join(root, '.dsh', 'canvas');
@@ -1179,7 +1210,8 @@ function publishCanvas(scope, sessionId, canvas) {
 function publishRunState(scope, sessionId, runState) {
   try {
     if (!sessionId) return false;
-    const live = scope && scope.sessions && scope.sessions.get(sessionId);
+    const sessionsSvc = resolveSessionsService(scope);
+    const live = sessionsSvc && typeof sessionsSvc.get === 'function' ? sessionsSvc.get(sessionId) : null;
     const root = live && live.header && live.header.cwd;
     if (!root) return false;
     const dir = join(root, '.dsh', 'canvas');
@@ -1194,9 +1226,126 @@ function publishRunState(scope, sessionId, runState) {
   }
 }
 
+/**
+ * Force-stop any running or paused (waitingLead) workflow for `sessionId`.
+ * Uses DSH 0.2.2 native APIs:
+ *   - `scope.subagents.interrupt(childId, { kind: 'user' })` for each live child
+ *   - `scope.subagents.drainDescendants([rootAgent])` to tear down the full subtree
+ *   - `rootAgent.cancel({ kind: 'user' }, { keepInbox: true })` when a turn is active
+ * Also aborts our local `AbortController`, preserves partial progress in `lastRunBySession`,
+ * clears `runBySession` (`waitingLead`), and writes `halted` / `idle` to `.run.json`.
+ */
+function abortSessionRun(scope, sessionId, rootAgent, opts) {
+  const sid = sessionId !== undefined && sessionId !== null ? String(sessionId) : '';
+  if (!sid) return { stopped: false, wasRunning: false, wasWaiting: false };
+  const allowCancelRoot = !(opts && opts.cancelRootTurn === false);
+
+  const active = activeRunBySession.get(sid);
+  const wasRunning = Boolean(active);
+  const childIds = active && active.childIds ? Array.from(active.childIds) : [];
+  if (active) {
+    try { active.ctrl.abort('user-stop'); } catch (_e) { /* ignore */ }
+    activeRunBySession.delete(sid);
+  }
+
+  // Interrupt every tracked live child immediately via DSH's native subagents.interrupt API.
+  let subagents = null;
+  try {
+    subagents = (scope && scope.subagents) || (scope && typeof scope.get === 'function' ? scope.get('subagents') : null);
+  } catch (_e) { subagents = null; }
+  if (subagents && typeof subagents.interrupt === 'function') {
+    for (const cid of childIds) {
+      try { subagents.interrupt(cid, { kind: 'user' }); } catch (_e) { /* best-effort */ }
+    }
+  }
+
+  // Resolve the exact root Agent (from command invocation or `scope.agents.get(sid)`)
+  // to drain the entire descendant subagent tree and cancel any active root turn.
+  let targetAgent = rootAgent || null;
+  if (!targetAgent) {
+    let agentsSvc = null;
+    try {
+      agentsSvc = (scope && scope.agents) || (scope && typeof scope.get === 'function' ? scope.get('agents') : null);
+    } catch (_e) { agentsSvc = null; }
+    if (agentsSvc && typeof agentsSvc.get === 'function') {
+      try { targetAgent = agentsSvc.get(sid) || null; } catch (_e) { targetAgent = null; }
+    }
+  }
+  if (targetAgent) {
+    if (subagents && typeof subagents.drainDescendants === 'function') {
+      try {
+        // Fire-and-forget teardown so `/canvas-stop` returns immediately to the UI even if a remote provider stalls.
+        Promise.resolve(subagents.drainDescendants([targetAgent])).catch(() => {});
+      } catch (_e) { /* best-effort */ }
+    }
+    if (allowCancelRoot && (wasRunning || targetAgent.running) && typeof targetAgent.cancel === 'function') {
+      try { targetAgent.cancel({ kind: 'user' }, { keepInbox: true }); } catch (_e) { /* best-effort */ }
+    }
+  }
+
+  const st = runBySession.get(sid);
+  const wasWaiting = Boolean(st && st.waitingLead);
+  if (st) {
+    if (st.done && st.done.size > 0) {
+      lastRunBySession.set(sid, {
+        sig: st.sig,
+        done: new Set(st.done),
+        results: { ...(st.results || {}) },
+        labels: { ...(st.labels || {}) },
+        failed: { ...(st.failed || {}) },
+        emptyOutputs: { ...(st.emptyOutputs || {}) },
+        blockedEdges: new Set(st.blockedEdges || []),
+        pruned: new Set(st.pruned || []),
+        decisions: { ...(st.decisions || {}) },
+        fallbackLinks: Array.isArray(st.fallbackLinks) ? st.fallbackLinks.map((fl) => ({ ...fl })) : [],
+        halted: true,
+      });
+    }
+    runBySession.delete(sid);
+    publishRunState(scope, sid, {
+      status: 'halted',
+      done: Array.from(st.done || []),
+      decisions: { ...(st.decisions || {}) },
+      pruned: Array.from(st.pruned || []),
+      blockedEdges: Array.from(st.blockedEdges || []),
+      loopCounts: {},
+      nodeAttempts: { ...(st.nodeAttempts || {}) },
+      waitingLead: null,
+    });
+    saveStore();
+  } else {
+    // Even if in-memory state was already gone (e.g. after restart), overwrite any stale `.run.json`
+    // so a leftover `need-lead` file can never trap the sidebar UI.
+    publishRunState(scope, sid, {
+      status: wasRunning ? 'halted' : 'idle',
+      done: [],
+      decisions: {},
+      pruned: [],
+      blockedEdges: [],
+      loopCounts: {},
+      nodeAttempts: {},
+      waitingLead: null,
+    });
+  }
+  return { stopped: true, wasRunning, wasWaiting };
+}
+
 async function runPlan(scope, args, exec) {
   const agent = exec && exec.agent;
   const sid = agent && agent.id !== undefined ? String(agent.id) : '';
+  if (args && args.cancel === true) {
+    // Pass `cancelRootTurn: false` because this tool call runs inside the model's current turn;
+    // cancelling the root turn here would cut off the model's own cancellation confirmation reply.
+    const res = abortSessionRun(scope, sid, agent, { cancelRootTurn: false });
+    return {
+      status: 'cancelled',
+      wasRunning: res.wasRunning,
+      wasWaiting: res.wasWaiting,
+      hint: res.wasWaiting
+        ? '已终止暂停中的工作流并解除等待拍板状态。'
+        : '已终止当前工作流执行。',
+    };
+  }
   const payload = sid ? canvasBySession.get(sid) : undefined;
   if (!payload) return { error: '当前会话还没有画布数据。请在右侧 Workflow 画布点「启用」。' };
   if (!payload.enabled) return { error: '画布当前是「已禁用」状态。请在画布上点「启用」后再运行。' };
@@ -1227,7 +1376,7 @@ function inspectPlan(sid) {
       provider: String(n.provider || ''),
       model: String(n.model || ''),
       reasoning: String(n.reasoning || ''),
-      preset: n.preset === 'minimal' ? 'minimal' : 'standard',
+      preset: (normalizeKind(n.kind) === 'condition' || n.preset === 'minimal') ? 'minimal' : 'standard',
       keepSession: Boolean(n.keepSession),
       structured: Boolean(n.structured),
       fallbackModel: String(n.fallbackModel || ''),
@@ -1297,12 +1446,16 @@ function buildActiveCanvasContext(sid) {
   const runState = runBySession.get(String(sid));
   if (runState && runState.waitingLead) {
     const wl = runState.waitingLead;
+    const loopHint = wl.loopFeedback
+      ? ('（↺ 第 ' + wl.loopFeedback.retry + '/' + wl.loopFeedback.max + ' 次回环修正，打回理由：' + (wl.loopFeedback.reason || '未达预期') + '）')
+      : '';
     return [
       '[Workflow Canvas Active — Paused at Lead Step]',
-      '当前会话的工作流画布正暂停在中间 Lead 节点「' + wl.label + '」（分工：' + (wl.role || wl.label) + '）。',
+      '当前会话的工作流画布正暂停在中间 Lead 节点「' + wl.label + '」（分工：' + (wl.role || wl.label) + '）' + loopHint + '。',
       '- 若用户的当前消息是在拍板、确认、补充决策或要求继续：请整理决策结论并直接调用 `canvas_workflow({ leadResult: "..." })` 恢复下游节点运行。',
+      '- 若用户要求取消、结束或终止当前工作流：直接调用 `canvas_workflow({ cancel: true })` 解除暂停状态。',
       '- 若用户要求放弃当前进度从头重跑：调用 `canvas_workflow({ reset: true })`。',
-      '- 若用户要求修改画布结构/分工：先 `canvas_inspect` 再用 `canvas_patch`。',
+      '- 若用户要求修改画布结构、分工、参考清单、分支或回环：先 `canvas_inspect` 再用 `canvas_patch`。',
     ].join('\n');
   }
 
@@ -1311,21 +1464,29 @@ function buildActiveCanvasContext(sid) {
     .map((n) => (n.kind === 'lead' ? '〔Lead〕' : (n.kind === 'condition' ? '〔条件〕' : '')) + (n.label || n.id))
     .join(' → ') + (nodes.length > 8 ? ' …' : '');
   const hasTask = Boolean(String((plan && plan.task) || '').trim());
+  const loopCount = (plan && Array.isArray(plan.edges)) ? plan.edges.filter((e) => isLoopEdge(e)).length : 0;
+  const globalRefs = normalizeRefs(plan && plan.refs) || [];
   const prefix = String(sid) + '::';
   const hasMemory = nodes.some((n) => n.keepSession && (liveChild.has(prefix + n.id) || childByNode.has(prefix + n.id)));
+  const metaParts = [
+    '共 ' + nodes.length + ' 个执行节点：' + preview,
+    '入口总任务：' + (hasTask ? '已填写' : '未填写'),
+  ];
+  if (loopCount > 0) metaParts.push('含 ' + loopCount + ' 条受控回环（引擎自动按条件带反馈重试并在超限时熔断交 Lead，无需你手动循环调用）');
+  if (globalRefs.length > 0) metaParts.push('全局参考 ×' + globalRefs.length);
   const lines = [
     '[Workflow Canvas Active]',
-    '当前会话的右侧工作流画布处于「● 已启用」状态（共 ' + nodes.length + ' 个执行节点：' + preview + '；入口总任务：' + (hasTask ? '已填写' : '未填写') + '）。',
+    '当前会话的右侧工作流画布处于「● 已启用」状态（' + metaParts.join('；') + '）。',
     '- 若用户发出任务请求、布置工作或说「开始 / 执行 / 跑一次」：请直接调用 `canvas_workflow` 按画布编排执行（'
       + (hasTask ? '可直接沿用入口总任务；若用户给出了新任务则通过 task 参数传入' : '请将用户的任务内容作为 task 参数传入')
       + '），不要绕过画布直接自己完成。',
-    '- 若用户在讨论或要求修改画布结构、模型、分工或连线：请先 `canvas_inspect` 再用 `canvas_patch` 就地修改，不要直接运行。',
+    '- 若用户在讨论或要求修改画布结构、模型、分工、参考清单、条件分支、回环或连线：请先 `canvas_inspect` 再用 `canvas_patch` 就地修改，不要直接运行。',
     '- 仅当用户明确只是闲聊、问无关问题或要求先停用画布时，才无需调用 `canvas_workflow`。',
   ];
   if (hasMemory) {
     lines.push('- 本会话已有开启「记忆」节点的历史子代理会话：若用户说「再跑一次 / 换个任务重跑」，请先简短询问用户是保留上次记忆继续（reset: true）还是清空记忆全新开跑（reset: true, clearMemory: true）。');
   }
-  const stdCount = nodes.filter((n) => n.kind !== 'lead' && n.preset !== 'minimal').length;
+  const stdCount = nodes.filter((n) => n.kind !== 'lead' && n.kind !== 'condition' && n.preset !== 'minimal').length;
   if (stdCount >= 2) {
     lines.push('- 本画布包含 ' + stdCount + ' 个可写/命令型（standard）子代理，受主对话权限上限约束；若任务涉及改代码、写文件或跑终端命令且当前主对话权限偏严格，请先简短提醒用户放开主对话权限再调 `canvas_workflow`，避免中途报错白耗额度。');
   }
@@ -1358,6 +1519,17 @@ async function executePlan(scope, plan, args, exec) {
   const opts = args || {};
   const agent = exec && exec.agent;
   const sid = agent && agent.id !== undefined ? String(agent.id) : '';
+  if (opts.cancel === true) {
+    const res = abortSessionRun(scope, sid, agent, { cancelRootTurn: false });
+    return {
+      status: 'cancelled',
+      wasRunning: res.wasRunning,
+      wasWaiting: res.wasWaiting,
+      hint: res.wasWaiting
+        ? '已终止暂停中的工作流并解除等待拍板状态。'
+        : '已终止当前工作流执行。',
+    };
+  }
   if (!plan || !Array.isArray(plan.nodes) || !plan.nodes.length) {
     return { error: '画布没有可执行的节点。' };
   }
@@ -1700,7 +1872,56 @@ async function executePlan(scope, plan, args, exec) {
   // downstream agents start immediately instead of waiting for slower siblings.
   const inFlight = new Map();
 
-  const isAborted = () => Boolean(exec && exec.signal && exec.signal.aborted);
+  const runCtrl = new AbortController();
+  const runSignal = runCtrl.signal;
+  const activeRec = { ctrl: runCtrl, childIds: new Set() };
+  const parentSignal = exec && exec.signal;
+  const onParentAbort = () => {
+    try { runCtrl.abort('parent-abort'); } catch (_e) { /* ignore */ }
+    // Also interrupt every already-running child via DSH's native subagents.interrupt API,
+    // since startActivation({ signal }) only aborts startup, not post-start execution.
+    try {
+      const subagents = (scope && scope.subagents) || (scope && typeof scope.get === 'function' ? scope.get('subagents') : null);
+      if (subagents && typeof subagents.interrupt === 'function') {
+        for (const cid of activeRec.childIds) {
+          try { subagents.interrupt(cid, { kind: 'user' }); } catch (_e) { /* best-effort */ }
+        }
+      }
+    } catch (_e) { /* best-effort */ }
+  };
+  if (parentSignal) {
+    if (parentSignal.aborted) onParentAbort();
+    else if (typeof parentSignal.addEventListener === 'function') {
+      parentSignal.addEventListener('abort', onParentAbort, { once: true });
+    }
+  }
+  if (sid) activeRunBySession.set(sid, activeRec);
+
+  const isAborted = () => Boolean(runSignal.aborted || (parentSignal && parentSignal.aborted));
+  // Raced alongside `inFlight` so user cancellation unblocks immediately even if a child activation hangs.
+  const abortPromise = new Promise((resolve) => {
+    if (isAborted()) { resolve({ __aborted: true }); return; }
+    runSignal.addEventListener('abort', () => resolve({ __aborted: true }), { once: true });
+  });
+  const finishAborted = () => {
+    snapshotLastRun(true);
+    emitRunState('halted', null);
+    if (sid) runBySession.delete(sid);
+    saveStore();
+    return {
+      status: 'halted',
+      error: '工作流执行已取消。',
+      results: state.results,
+      labels: state.labels,
+      failed: Object.values(state.failed),
+      emptyOutputs: Object.values(state.emptyOutputs),
+      decisions: Object.values(state.decisions),
+      branchSkipped: branchSkippedList(),
+      ...(state.loopExhausted.length ? { loopExhausted: state.loopExhausted } : {}),
+      reused,
+      skipped,
+    };
+  };
   const permBlocked = [];
   let activationFailCount = 0;
   let haltedReason = '';
@@ -1717,7 +1938,7 @@ async function executePlan(scope, plan, args, exec) {
       const warmChildId = (fb && state.loopWarmChild[node.id]) ? state.loopWarmChild[node.id] : '';
       const loopCtx = fb ? { feedback: fb, warmChildId } : undefined;
       if (fb) delete state.loopFeedback[node.id];
-      const promise = spawnNode(scope, plan, node, state.results, agent, exec.signal, sid, state.failed, state.pruned, loopCtx)
+      const promise = spawnNode(scope, plan, node, state.results, agent, runSignal, sid, state.failed, state.pruned, loopCtx)
         .then(
           (outcome) => ({ node, outcome }),
           (err) => ({ node, outcome: { ok: false, reason: 'run-failed', text: '运行失败：' + String((err && err.message) || err) } }),
@@ -1726,11 +1947,10 @@ async function executePlan(scope, plan, args, exec) {
     }
   };
 
+  try {
   for (;;) {
     if (isAborted()) {
-      emitRunState('halted', null);
-      if (sid) runBySession.delete(sid);
-      return { error: '工作流执行已取消。' };
+      return finishAborted();
     }
     // On circuit-break halt, stop launching new downstream waves immediately,
     // but let already in-flight siblings settle so no orphan promises or partial
@@ -1777,13 +1997,12 @@ async function executePlan(scope, plan, args, exec) {
     launchReadyAgents();
 
     if (inFlight.size > 0) {
-      const { node, outcome } = await Promise.race(inFlight.values());
-      inFlight.delete(node.id);
-      if (isAborted()) {
-        emitRunState('halted', null);
-        if (sid) runBySession.delete(sid);
-        return { error: '工作流执行已取消。' };
+      const raceHit = await Promise.race([...inFlight.values(), abortPromise]);
+      if ((raceHit && raceHit.__aborted) || isAborted()) {
+        return finishAborted();
       }
+      const { node, outcome } = raceHit;
+      inFlight.delete(node.id);
       state.labels[node.id] = node.label;
       if (node.kind === 'condition') {
         const { branches, isDefaultBinary } = conditionBranches(node);
@@ -1900,6 +2119,29 @@ async function executePlan(scope, plan, args, exec) {
             }
             for (const e of plan.edges || []) {
               if (e && members.has(e.from)) state.blockedEdges.delete(edgeKey(e));
+            }
+            // Un-prune previously pruned downstream nodes reachable from loop members so
+            // an inner condition picking a different branch on a retry round can still run them.
+            if (state.pruned.size > 0) {
+              const fwdAdj = new Map();
+              for (const e of forwardEdgesOf(plan.edges || [])) {
+                if (!e || !e.from || !e.to) continue;
+                if (!fwdAdj.has(e.from)) fwdAdj.set(e.from, []);
+                fwdAdj.get(e.from).push(e.to);
+              }
+              const reach = new Set(members);
+              const rq = Array.from(members);
+              for (let i = 0; i < rq.length; i += 1) {
+                for (const nx of fwdAdj.get(rq[i]) || []) {
+                  if (!reach.has(nx)) { reach.add(nx); rq.push(nx); }
+                }
+              }
+              for (const rid of reach) {
+                if (!members.has(rid) && state.pruned.has(rid)) {
+                  state.pruned.delete(rid);
+                  state.done.delete(rid);
+                }
+              }
             }
             state.fallbackLinks = state.fallbackLinks.filter((fl) => !members.has(fl.from) && !members.has(fl.to));
             state.loopFeedback[le.to] = {
@@ -2035,6 +2277,7 @@ async function executePlan(scope, plan, args, exec) {
       fallbackParts.push('⚠ 条件节点（' + unmatchedConds.join('、') + '）所有分支均未命中，已跳过中间分支直接转交给你处理。');
     }
     const fallbackNotice = fallbackParts.join(' ');
+    const mergedLeadRefs = normalizeRefs((normalizeRefs(plan && plan.refs) || []).concat(normalizeRefs(leadNode.refs) || []));
     const hasDownstreamWork = remaining.some((n) => n.id !== leadNode.id);
     if (!hasDownstreamWork && leadResult === undefined) {
       // Terminal Lead: zero downstream nodes remain, so complete the run directly
@@ -2050,7 +2293,7 @@ async function executePlan(scope, plan, args, exec) {
           label: leadNode.label,
           role: leadNode.role || leadNode.label,
           needs: depsOf(leadNode).map((id) => byId.get(id).label),
-          ...(normalizeRefs(leadNode.refs) ? { refs: normalizeRefs(leadNode.refs) } : {}),
+          ...(mergedLeadRefs ? { refs: mergedLeadRefs } : {}),
         },
         results: state.results,
         labels: state.labels,
@@ -2067,10 +2310,14 @@ async function executePlan(scope, plan, args, exec) {
       };
     }
     if (leadResult === undefined) {
+      const leadFbSummary = leadFb
+        ? { retry: leadFb.retry, max: leadFb.max, sourceLabel: leadFb.sourceLabel, reason: leadFb.reason }
+        : null;
       state.waitingLead = {
         id: leadNode.id,
         label: leadNode.label,
         role: leadNode.role || leadNode.label,
+        ...(leadFbSummary ? { loopFeedback: leadFbSummary } : {}),
       };
       emitRunState('need-lead', state.waitingLead);
       return {
@@ -2079,8 +2326,8 @@ async function executePlan(scope, plan, args, exec) {
           label: leadNode.label,
           role: leadNode.role || leadNode.label,
           needs: depsOf(leadNode).map((id) => byId.get(id).label),
-          ...(normalizeRefs(leadNode.refs) ? { refs: normalizeRefs(leadNode.refs) } : {}),
-          ...(leadFb ? { loopFeedback: { retry: leadFb.retry, max: leadFb.max, sourceLabel: leadFb.sourceLabel, reason: leadFb.reason } } : {}),
+          ...(mergedLeadRefs ? { refs: mergedLeadRefs } : {}),
+          ...(leadFbSummary ? { loopFeedback: leadFbSummary } : {}),
         },
         results: state.results,
         labels: state.labels,
@@ -2091,7 +2338,7 @@ async function executePlan(scope, plan, args, exec) {
         ...(state.loopExhausted.length ? { loopExhausted: state.loopExhausted } : {}),
         sessions: leadSessions,
         hint: (fallbackNotice ? fallbackNotice + ' ' : '')
-          + '这一步由你（Lead 本体）完成。完成后再次调用本工具，把结果放进 leadResult 继续；若需从头重跑可传 reset: true。',
+          + '这一步由你（Lead 本体）完成。完成后再次调用本工具，把结果放进 leadResult 继续；若需取消本次流程可传 cancel: true，若需从头重跑可传 reset: true。',
       };
     }
     state.waitingLead = null;
@@ -2101,11 +2348,19 @@ async function executePlan(scope, plan, args, exec) {
     state.done.add(leadNode.id);
     leadResult = undefined;
   }
+  } finally {
+    if (parentSignal && typeof parentSignal.removeEventListener === 'function') {
+      try { parentSignal.removeEventListener('abort', onParentAbort); } catch (_e) { /* ignore */ }
+    }
+    if (sid && activeRunBySession.get(sid) === activeRec) {
+      activeRunBySession.delete(sid);
+    }
+  }
 }
 
 /** Agent-facing guide, shipped as a skill so any agent can load it on demand. */
 const SKILL_NAME = 'workflow-canvas';
-const SKILL_DESCRIPTION = 'Workflow canvas (画布 / 工作流 / 编排): inspect, draw, edit or run a node graph of DSH subagents — add or re-role nodes, wire typed links, run in parallel waves, handle Lead steps, presets and memory. Load before using canvas_inspect, canvas_generate, canvas_patch or canvas_workflow.';
+const SKILL_DESCRIPTION = 'Workflow canvas (画布 / 工作流 / 编排 / 条件分支 / 回环重试): inspect, draw, edit, run or cancel a node graph of DSH subagents, condition judges, Lead gates, controlled retry loops, reference lists, presets and memory. Load before using canvas_inspect, canvas_generate, canvas_patch or canvas_workflow.';
 function skillPath() {
   try {
     return fileURLToPath(new URL('./skills/workflow-canvas/SKILL.md', import.meta.url));
@@ -2194,6 +2449,21 @@ export function apply(ctx) {
             }
           },
         }), 'workflow-canvas: sync command');
+        scope.effect(() => scope.commands.register({
+          name: 'canvas-stop',
+          description: 'Stop any running or paused workflow canvas execution for this session.',
+          recordInput: false,
+          handler: ({ agent }) => {
+            try {
+              const id = agent && agent.id !== undefined ? String(agent.id) : '';
+              if (!id) return { kind: 'error', text: 'no session' };
+              abortSessionRun(ctx, id, agent);
+              return { kind: 'success', text: 'workflow stopped' };
+            } catch (error) {
+              return { kind: 'error', text: String((error && error.message) || error) };
+            }
+          },
+        }), 'workflow-canvas: stop command');
       } catch (_e) {
         /* command registry unavailable */
       }
@@ -2447,6 +2717,9 @@ export function apply(ctx) {
                 '画布状态：' + (v.enabled ? '● 已启用' : '○ 已禁用') + (v.paused ? '（当前暂停在 Lead 步骤）' : ''),
                 '总任务：' + (v.task || '（未填写，运行时可通过 task 参数指定）'),
               ];
+              if (Array.isArray(v.refs) && v.refs.length) {
+                head.push('全局参考：' + v.refs.join('；'));
+              }
               if (v.error) head.push('校验错误：' + v.error);
               const warnBlock = Array.isArray(v.warnings) && v.warnings.length
                 ? '\n\n⚠ 结构提示：\n' + v.warnings.map((w) => '- ' + w).join('\n')
@@ -2471,7 +2744,9 @@ export function apply(ctx) {
                   + (n.role ? '：' + n.role : '');
               });
               const edgeLines = (v.edges || []).map((e) => '- ' + e.from
-                + ' --(' + e.type + (e.branch ? ':' + e.branch : '') + ')--> ' + e.to);
+                + ' --(' + e.type + (e.branch ? ':' + e.branch : '')
+                + (e.loop ? ', ↺ loop ×' + normalizeMaxIterations(e.maxIterations) : '')
+                + ')--> ' + e.to);
               return [{
                 type: 'text',
                 text: head.join('\n')
@@ -2492,16 +2767,17 @@ export function apply(ctx) {
       }
     });
 
-    ctx.inject(['tools', 'subagents'], (scope) => {
+    ctx.inject(['tools', 'subagents', 'sessions'], (scope) => {
       try {
         scope.effect(() => scope.tools.register({
           name: 'canvas_workflow',
-          description: 'Run the workflow canvas of the current session. Executes subagent nodes in parallel waves; when a Lead node is reached it returns status "need-lead" and expects a follow-up call carrying leadResult. Supports optional `task` to override the entry Lead task and `reset: true` to restart from scratch. Load the `workflow-canvas` skill first when unsure.',
+          description: 'Run, resume, or cancel the workflow canvas of the current session. Executes subagent and condition nodes in parallel waves with automatic branch pruning and controlled retry loops; pauses with status "need-lead" at intermediate Lead nodes (resume via leadResult, or abort via cancel: true). Also supports task override, reset, retryFailed, fromNodes, clearMemory, and maxParallel (1–8). Load the `workflow-canvas` skill first when unsure.',
           parameters: {
             type: 'object',
             properties: {
               leadResult: { type: 'string', description: 'Your own output for the Lead step that was just requested.' },
               task: { type: 'string', description: 'Optional overall task overriding the entry Lead task for this run (useful for reusing a preset).' },
+              cancel: { type: 'boolean', description: 'Stop and cancel any active or paused (waitingLead) workflow run cleanly.' },
               reset: { type: 'boolean', description: 'Discard any paused run progress and start from the beginning.' },
               retryFailed: { type: 'boolean', description: 'Reuse succeeded nodes from the previous run and re-run only failed, empty, or unfinished nodes along with their downstream.' },
               fromNodes: { type: 'array', items: { type: 'string' }, description: 'Re-run only the specified node ids (or labels) and their downstream, reusing all other succeeded nodes from the previous run.' },
@@ -2534,6 +2810,7 @@ export function apply(ctx) {
             render: (_args, value) => {
               const v = value || {};
               if (typeof v.error === 'string') return [{ type: 'text', text: v.error }];
+              if (v.status === 'cancelled') return [{ type: 'text', text: v.hint || '已终止当前工作流执行。' }];
               const results = v.results || {};
               const labels = v.labels || {};
               const blocks = Object.keys(results).map((id) => {
@@ -2573,6 +2850,9 @@ export function apply(ctx) {
                 : '';
               if (v.status === 'need-lead') {
                 const n = v.node || {};
+                const refsBlock = Array.isArray(n.refs) && n.refs.length
+                  ? '\n参考资料 / 约束：\n' + n.refs.map((r) => '- ' + r).join('\n')
+                  : '';
                 const handed = Array.isArray(v.sessions) ? v.sessions.filter((s) => s && s.childId) : [];
                 const handover = handed.length
                   ? '\n\n可用会话（session 连线）：' + handed.map((s) => s.label + ' → ' + s.childId).join('；')
@@ -2582,6 +2862,7 @@ export function apply(ctx) {
                   type: 'text',
                   text: '需要你（Lead）完成「' + n.label + '」：' + n.role
                     + '\n需要用到：' + ((n.needs && n.needs.length) ? n.needs.join('、') : '（无上游）')
+                    + refsBlock
                     + decisionList
                     + failedList
                     + emptyList
@@ -2601,6 +2882,9 @@ export function apply(ctx) {
                   : '';
                 if (v.finalLead) {
                   const fl = v.finalLead;
+                  const refsBlock = Array.isArray(fl.refs) && fl.refs.length
+                    ? '\n参考资料 / 约束：\n' + fl.refs.map((r) => '- ' + r).join('\n')
+                    : '';
                   const handed = Array.isArray(v.sessions) ? v.sessions.filter((s) => s && s.childId) : [];
                   const handover = handed.length
                     ? '\n\n可用会话（session 连线）：' + handed.map((s) => s.label + ' → ' + s.childId).join('；')
@@ -2610,6 +2894,7 @@ export function apply(ctx) {
                     type: 'text',
                     text: '所有子代理已完成，现在进入终审 Lead 步骤「' + fl.label + '」：' + fl.role
                       + '\n需要用到：' + ((fl.needs && fl.needs.length) ? fl.needs.join('、') : '（无上游）')
+                      + refsBlock
                       + decisionList
                       + failedList
                       + emptyList
@@ -2657,6 +2942,7 @@ export {
   sessionIdFromContext,
   buildActiveCanvasContext,
   isPermissionFailure,
+  abortSessionRun,
   runPlan,
   executePlan,
 };

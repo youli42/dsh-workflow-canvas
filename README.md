@@ -103,6 +103,7 @@ Press **`● ON`** at the top-left of the canvas, then either click **`▶ Run`*
 
 - If the entry Lead's task is blank, `▶ Run` stays disabled with a hint and you can still send your chat message directly as `task`.
 - At an intermediate **Lead** node, the canvas shows **`⏸ Ready`** (and Entry Lead shows `⏸ Awaiting Lead`) while handing control to chat; once you reply, downstream nodes resume automatically through the final Lead review.
+- **Unified `⏹ Stop` button**: Whenever a run is active or paused at **`⏸ Awaiting Lead`**, a red **`⏹ Stop`** button appears beside `● ON` and on the Entry Lead card — clicking it immediately cancels the root turn, interrupts all live subagents, clears any Lead pause, and preserves completed-node cache (you can also ask in chat to cancel via `canvas_workflow({ cancel: true })`).
 - Re-running in the same chat supports `reset: true`; if any node has saved **Memory**, the agent confirms whether to keep memory or clear it (`clearMemory: true`).
 
 ![Auto-run enabled canvas, pause at Lead decision, and finish](docs/images/lead-pause-resume.gif)
@@ -131,16 +132,16 @@ Active nodes glow blue with animated flow wires and turn green when done. **Clic
 | `Shift+A` / Drag-wire drop | Add a node at cursor, or drag from an output socket onto blank canvas to create & auto-connect (`1` Subagent, `2` Lead, `3` Condition) |
 | Middle-drag / `Space` + left-drag | Pan the canvas |
 | Wheel / bottom-right `⊡` & `100%` pill | Zoom around cursor / fit all nodes / click to reset 100%, drag left-right to scrub zoom |
-| `⇄ Horiz` / `⇅ Vert` | Switch canvas direction and auto-layout (vertical mode uses top-in / bottom-out vertical curves for narrow sidebars; Condition nodes support `Out R / Out L` side toggle) |
+| `⇄ Horiz` / `⇅ Vert` | Switch canvas direction and auto-layout, **remembered as the default for new sessions** (vertical mode uses top-in / bottom-out curves; Condition nodes support `Out R / Out L` side toggle) |
 | Marquee / `Shift`/`Ctrl` click + `Shift+D` / `Delete` | Multi-select move, duplicate (with settings & internal links), or batch delete |
-| Right-click node / edge / canvas | Context menu (edit role, manage refs, insert node on wire, add nodes, layout, undo/redo) |
+| Right-click node / edge / canvas | Context menu (edit role, manage refs, insert node on wire, create loop, add nodes, layout, undo/redo) |
 | Right-drag across wires | Cut links (activates at ≥ 6px drag without conflicting with context menu; toggle under `⋯`) |
-| `Ctrl+Z` / `Ctrl+Shift+Z` (`Ctrl+Y`) / `Esc` | Undo / redo structural edit / close popups |
-| `⋯` menu | Undo, Fit, Import / Copy JSON, Auto layout, Clear canvas, Visual effects, Max parallel, Language, Shortcuts |
+| Toolbar `↶ / ↷` / `Ctrl+Z` / `Ctrl+Shift+Z` (`Ctrl+Y`) / `Esc` | Undo / redo (covers structural edits, node drags & layout flips) / close popups |
+| `⋯` menu | Undo, Fit, Import / Copy JSON (preserves direction), Auto layout, Clear canvas, Visual effects, Max parallel, Language, Shortcuts |
 
 ## Presets, sharing & limits
 
-- **Presets & cross-session reuse**: Click `☰ Presets` to save the current canvas at the top of the menu (immediately available in any new chat), or load one of the 5 starter templates (including conditional branching & retry loop) and **New blank canvas**. Custom presets live in browser storage — use `⋯ → ⇧ Copy JSON` and `⇩ Import` to share across devices.
+- **Presets & cross-session reuse**: Click `☰ Presets` to save the current canvas (including its horizontal/vertical layout direction) — **already-open sessions stay in sync live** with a manual `↻` refresh button — or load one of the 5 starter templates (including conditional branching & retry loop, adapting to the active layout direction) and **New blank canvas**. Custom presets live in browser storage — use `⋯ → ⇧ Copy JSON` and `⇩ Import` to share across devices.
 - **Partial resume & concurrency**: If a mid-flow node fails, call `retryFailed: true` or `fromNodes` to reuse succeeded outputs and re-run only the failed segment and its downstream; adjust max concurrency (1 / 2 / 4 / 6 / 8, default 4) under `⋯`.
 - **How this differs from other canvas plugins**: Built for **multi-subagent orchestration + conditional routing + conversation Lead gates**; for `ctx.workflows` low-level tool pipelines, see [`@piedpiper911/dsh-workflow-canvas`](https://github.com/PiedPiper911/dsh-workflow-canvas).
 - **Limits**: Per-node `Scope` only narrows tools within the main chat's permission/sandbox ceiling.

@@ -611,3 +611,156 @@ test('controlled loop helpers: membership, validation, multi-select analysis, by
     assert.equal(client.loopMemberIdsUI(loopTpl.nodes, loopTpl.edges, le).size, 3);
   }
 });
+
+test('applyPanStep + zoomAroundPoint compose cleanly without viewport snap-back (#10)', () => {
+  const client = loadClientTestExports();
+  let view = { k: 1, x: 100, y: 80 };
+  let pan = { lastX: 300, lastY: 200 };
+
+  // Step 1: pan +20, +10
+  let s1 = client.applyPanStep(view, pan, 320, 210);
+  view = s1.view;
+  pan = s1.pan;
+  assert.deepEqual({ ...view }, { k: 1, x: 120, y: 90 });
+
+  // Step 2: wheel zoom around cursor (320, 210) while still panning
+  const worldBeforeX = (320 - view.x) / view.k;
+  const worldBeforeY = (210 - view.y) / view.k;
+  view = client.zoomAroundPoint(view, 320, 210, -120, 0);
+  assert.ok(view.k > 1, 'zoomed in');
+  assert.ok(Math.abs((320 - view.x) / view.k - worldBeforeX) < 1e-6);
+  assert.ok(Math.abs((210 - view.y) / view.k - worldBeforeY) < 1e-6);
+
+  // Step 3: next pan mousemove (+5, -3) applies ONLY the delta on top of post-zoom view (zero jump!)
+  const afterZoomX = view.x;
+  const afterZoomY = view.y;
+  const s3 = client.applyPanStep(view, pan, 325, 207);
+  assert.ok(Math.abs(s3.view.x - (afterZoomX + 5)) < 1e-6, 'preserves zoom anchor x');
+  assert.ok(Math.abs(s3.view.y - (afterZoomY - 3)) < 1e-6, 'preserves zoom anchor y');
+  assert.equal(s3.view.k, view.k);
+});
+
+test('default direction persistence (#9) and preset change event dispatch (#12)', () => {
+  const store = new Map();
+  const events = [];
+  let loaded = null;
+  const sandbox = {
+    window: {
+      __ModuleLoader__: { load(mod) { loaded = mod; } },
+      localStorage: {
+        getItem: (k) => (store.has(k) ? store.get(k) : null),
+        setItem: (k, v) => { store.set(k, String(v)); },
+      },
+      dispatchEvent: (ev) => { events.push(ev && ev.type); },
+    },
+    console, Math, Date, JSON, Map, Set, Array, Object, String, Number, Boolean, RegExp, Infinity,
+    encodeURIComponent, decodeURIComponent,
+  };
+  vm.runInNewContext(readFileSync(new URL('../client.js', import.meta.url), 'utf8'), sandbox);
+  const c = loaded.factory((name) => (name === 'react'
+    ? { createElement: () => null, useState: (v) => [typeof v === 'function' ? v() : v, () => {}], useRef: (v) => ({ current: v }), useEffect: () => {}, Component: class {} }
+    : {}
+  )).__test;
+
+  assert.equal(c.loadDefaultDirection(), 'lr');
+  c.saveDefaultDirection('tb');
+  assert.equal(c.loadDefaultDirection(), 'tb');
+  c.saveDefaultDirection('invalid');
+  assert.equal(c.loadDefaultDirection(), 'lr');
+
+  assert.equal(c.savePresets({ demo: { nodes: [], edges: [], direction: 'tb' } }), true);
+  assert.ok(events.includes('dsh-wc-presets-changed'), 'notifies other mounted tabs on preset save');
+  assert.equal(c.loadPresets().demo.direction, 'tb');
+});
+
+test('stopButtonState & deriveLeadStatuses unlock waitingLead cleanly on halted (#11 & #13)', () => {
+  const client = loadClientTestExports();
+  const idle = client.stopButtonState({ sessionRunning: false, runningNodesCount: 0, waitingLead: null, triggering: false, stopping: false, lang: 'zh' });
+  assert.equal(idle.visible, false);
+
+  const running = client.stopButtonState({ sessionRunning: true, runningNodesCount: 1, waitingLead: null, triggering: false, stopping: false, lang: 'zh' });
+  assert.equal(running.visible, true);
+  assert.equal(running.mode, 'running');
+  assert.equal(running.label, '⏹ 终止');
+
+  const waiting = client.stopButtonState({ sessionRunning: false, runningNodesCount: 0, waitingLead: { id: 'gate', label: 'Lead 拍板' }, triggering: false, stopping: false, lang: 'en' });
+  assert.equal(waiting.visible, true);
+  assert.equal(waiting.mode, 'waiting');
+  assert.equal(waiting.label, '⏹ Stop');
+
+  // Authoritative `halted` runState prevents stale child statusById from falsely re-locking Lead as Ready!
+  const nodes = [
+    { id: 'lead', kind: 'lead', label: 'Lead' },
+    { id: 'a', kind: 'agent', label: '调研' },
+    { id: 'gate', kind: 'lead', label: 'Lead 拍板', role: '决策' },
+    { id: 'b', kind: 'agent', label: '执行' },
+  ];
+  const edges = [
+    { id: 'e1', from: 'lead', to: 'a', type: 'prompt' },
+    { id: 'e2', from: 'a', to: 'gate', type: 'prompt' },
+    { id: 'e3', from: 'gate', to: 'b', type: 'prompt' },
+  ];
+  const paused = client.deriveLeadStatuses({
+    enabled: true,
+    nodes,
+    edges,
+    statusById: { a: 'done' },
+    sessionRunning: false,
+    runState: { status: 'need-lead', waitingLead: { id: 'gate', label: 'Lead 拍板' }, done: ['a'] },
+  });
+  assert.equal(paused.leadReadyIds.has('gate'), true);
+
+  const halted = client.deriveLeadStatuses({
+    enabled: true,
+    nodes,
+    edges,
+    statusById: { a: 'done' },
+    sessionRunning: false,
+    runState: { status: 'halted', waitingLead: null, done: ['a'] },
+  });
+  assert.equal(halted.leadReadyIds.size, 0, 'halted runState must never re-enter awaiting Lead');
+});
+
+test('analyzeLoopSelection rejects full-graph overlap & layoutGraph(lr) spaces tall condition nodes without overlap', () => {
+  const client = loadClientTestExports();
+  // Full-graph overlap: A -> B -> C and A -> X -> C; X already belongs to another loop (X -> X_cond -> X)
+  const nodes = [
+    { id: 'lead', kind: 'lead', x: 0, y: 0 },
+    { id: 'a', kind: 'agent', x: 100, y: 0 },
+    { id: 'b', kind: 'agent', x: 200, y: 0 },
+    { id: 'x', kind: 'agent', x: 200, y: 200 },
+    { id: 'xc', kind: 'condition', x: 300, y: 200 },
+    { id: 'c', kind: 'condition', x: 400, y: 0 },
+  ];
+  const edges = [
+    { id: 'e0', from: 'lead', to: 'a' },
+    { id: 'e1', from: 'a', to: 'b' },
+    { id: 'e2', from: 'b', to: 'c' },
+    { id: 'e3', from: 'a', to: 'x' },
+    { id: 'e4', from: 'x', to: 'xc' },
+    { id: 'e5', from: 'xc', to: 'c', branch: 'true' },
+    { id: 'elx', from: 'xc', to: 'x', branch: 'false', loop: true, maxIterations: 2 },
+  ];
+  // Selecting only {a, b, c} would implicitly pull x & xc into descendants(a) ∩ ancestors(c)
+  const check = client.analyzeLoopSelection(nodes, edges, ['a', 'b', 'c']);
+  assert.equal(check.ok, false);
+  assert.equal(check.reason, 'loopOverlap');
+
+  // Horizontal layoutGraph('lr') must not overlap a tall 10-branch condition node with its column sibling
+  const tallNodes = [
+    { id: 'lead', kind: 'lead', x: 0, y: 0 },
+    {
+      id: 'tall', kind: 'condition', x: 100, y: 0,
+      branches: ['b1', 'b2', 'b3', 'b4', 'b5', 'b6', 'b7', 'b8', 'b9', 'b10'],
+    },
+    { id: 'sib', kind: 'agent', x: 100, y: 50 },
+  ];
+  const tallEdges = [
+    { id: 't1', from: 'lead', to: 'tall' },
+    { id: 't2', from: 'lead', to: 'sib' },
+  ];
+  const laid = client.layoutGraph(tallNodes, tallEdges, 'lr');
+  const tallOut = laid.find((n) => n.id === 'tall');
+  const sibOut = laid.find((n) => n.id === 'sib');
+  assert.ok(sibOut.y >= tallOut.y + client.nodeHeight(tallOut) + 20, 'tall condition card must not overlap sibling below it');
+});

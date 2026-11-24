@@ -1,7 +1,7 @@
 {
   "name": "dsh-workflow-canvas",
-  "version": "1.5.0",
-  "description": "A visual multi-agent workflow canvas for DeepSeek Harness — parallel subagents, conditional branching & Lead decision gates in the sidebar.",
+  "version": "1.5.5",
+  "description": "A visual multi-agent workflow canvas for DeepSeek Harness — parallel subagents, conditional branching, controlled retry loops & Lead decision gates in the sidebar.",
   "type": "module",
   "main": "index.js",
   "exports": {

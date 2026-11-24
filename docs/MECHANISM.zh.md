@@ -9,20 +9,20 @@
 ## 1. 整体架构：Client 与 Host 的双向通道
 
 插件由两部分组成：
-- **客户端（`client.js`）**：挂载在 DSH 右侧边栏的 `Workflow` 标签页（`keepMounted: true`，收起侧边栏时保留画布状态），负责图形编辑、交互、预设存储与实时状态渲染。
-- **Host 侧（`index.js`）**：注册技能 `workflow-canvas`、同步命令 `/canvas-sync`，以及 4 个工具（`canvas_inspect`、`canvas_generate`、`canvas_patch`、`canvas_workflow`），负责真实调度子代理和持久化执行状态。
+- **客户端（`client.js`）**：挂载在 DSH 右侧边栏的 `Workflow` 标签页（`keepMounted: true` 且按 `sessionId` 设 `key` 隔离，收起侧边栏时保留画布状态），负责图形编辑、跨会话实时预设同步、全局布局偏好与实时状态渲染。
+- **Host 侧（`index.js`）**：注册技能 `workflow-canvas`、会话级强上下文注入 `systemPrompt.context`、两条命令（`/canvas-sync` 与 `/canvas-stop`），以及 4 个工具（`canvas_inspect`、`canvas_generate`、`canvas_patch`、`canvas_workflow`），负责真实调度子代理、统一中止与持久化执行状态。
 
 ```mermaid
 flowchart LR
     subgraph Client["客户端画布 (client.js)"]
-        UI["画布编辑 / 预设 / 状态胶囊"]
+        UI["画布编辑 / 预设 / 状态胶囊 / 终止"]
         LS["localStorage\n(画布草稿 / 预设 / 偏好)"]
         Poll["workspaceFiles 轮询\n(每 1.5s)"]
         Cat["subagentCatalog 投影监听\n(运行中每 700ms)"]
     end
 
     subgraph Host["Host 插件 (index.js)"]
-        Sync["/canvas-sync 命令"]
+        Sync["/canvas-sync & /canvas-stop"]
         Store["原子持久化\n.workflow-canvas-state.json"]
         Tools["canvas_inspect / generate / patch"]
         Exec["canvas_workflow\nDAG 波次执行器"]
@@ -30,12 +30,12 @@ flowchart LR
     end
 
     UI <--> LS
-    UI -- "启用 / 同步 / 轮次边界\n/canvas-sync" --> Sync
+    UI -- "启用 / 同步 / 终止\n/canvas-sync & /canvas-stop" --> Sync
     Sync --> Store
     Tools -- "写入 .dsh/canvas/<sid>.json" --> Poll
     Poll -- "时间戳比对 + merge 保留排版" --> UI
     Exec <--> Store
-    Exec -- "startActivation\nlabel#nodeId" --> Sub
+    Exec -- "startActivation / interrupt" --> Sub
     Sub -- "状态与 childId" --> Cat
     Cat --> UI
 ```
@@ -66,7 +66,7 @@ flowchart LR
      - 遇到**条件节点（`kind: "condition"`）**时，以轻量只读模式（`minimal`）+ 严格结构化 `outputSchema` 判断命中分支（支持默认 `if/else`、任意多路 `switch/case` 单选与 `multiMatch` 多选并行），随即阻断未命中出边并用祖先感知 BFS 剪枝未命中分支（包括防止上游 `session-ref` 侧线绕过条件）；若所有分支均未命中或条件节点自身失败，则绝不瞎猜分支，直接跳过中间分支转交最近下游 Lead（无下游 Lead 时熔断暂停）；
      - 遇到命中的**受控回环边（`loop: true, maxIterations: 1–10`）**时（`multiMatch` 下回环优先）：若未超单环上限与全局安全上限（`20` 次），精准重置 `descendants(入口) ∩ ancestors(条件)` 环内节点的运行状态（环外旁路不受影响），把打回理由注入回环入口（同时支持子代理与 `Lead` 节点），并在入口上一轮执行健康时自动复用其热子会话发送增量修正提示词（崩溃/空输出则丢弃旧会话重开）；若达到上限则熔断停止回跳，汇总 `1..N` 轮失败理由转交最近下游 Lead 拍板；
      - 遇到**中间 Lead 节点**（支持 `Lead → Lead` 阶段串联）时暂停并返回 `status: "need-lead"`；遇到**末尾终审 Lead**（无剩余下游）时直接一步返回 `status: "done"` 与 `finalLead`，无需多余回调轮次；
-   - 支持 **`retryFailed: true`** 或 **`fromNodes: [...]`** 局部重跑：自动复用上次已成功节点的缓存结果，仅重跑失败/目标节点及其下游；传 `reset: true` 则从头重跑。
+   - 支持 **`retryFailed: true`** 或 **`fromNodes: [...]`** 局部重跑：自动复用上次已成功节点的缓存结果，仅重跑失败/目标节点及其下游；传 `reset: true` 则从头重跑；传 **`cancel: true`** 或通过画布 **`⏹ 终止`** 触发并发命令 **`/canvas-stop`**（亦对齐 DSH 原生聊天停止按钮）时，立即调用 `subagents.interrupt(cid, { kind: 'user' })`、`drainDescendants([rootAgent])` 与 `rootAgent.cancel({ kind: 'user' }, { keepInbox: true })`，以 `abortPromise` 秒级跳出并发池、阻止拉起备用模型重试，同时保留已完成节点缓存并清空 `waitingLead` / `.run.json`。
 
 ```mermaid
 sequenceDiagram
@@ -119,15 +119,16 @@ sequenceDiagram
 ## 5. 实时状态胶囊与点击直达子会话
 
 1. **节点反查标记**：`spawnOnce` 启动子代理时，固定把 `spec.label` 设为 `<节点名>#<nodeId>`。
-2. **状态与遥测实时追踪**：客户端在对话运行期间每 700ms（以及挂载与每轮结束时）读取 `sessions.list` 投影中的 `subagentCatalog` 与 `subagentTiming`，用末尾正则 `/#([^\s#]+)$/` 精准反查子代理状态（`running` / `done` / `failed`）与 `childId`；同时轮询 Host 写入的 `<workspace>/.dsh/canvas/<sid>.run.json` 获取条件判决（`decisions`）、剪枝集（`pruned`）、阻断边（`blockedEdges`）、回环实时轮次（`loopCounts` / `nodeAttempts`）与待拍板状态（`waitingLead`）。
-3. **Lead「待拍板」自动高亮**：对于非入口 Lead 节点，客户端检测到其所有上游子代理均为 `done` 且下游尚未启动时，自动亮起蓝色 **`⏸ 待拍板`** 提示。
+2. **状态与遥测实时追踪**：客户端在对话运行期间每 700ms（以及挂载与每轮结束时）读取 `sessions.list` 投影中的 `subagentCatalog` 与 `subagentTiming`，用末尾正则 `/#([^\s#]+)$/` 精准反查子代理状态（`running` 具最高优先级，避免多轮重试被历史记录覆盖）与 `childId`；同时轮询 Host 写入的 `<workspace>/.dsh/canvas/<sid>.run.json` 获取条件判决（`decisions`）、剪枝集（`pruned`）、阻断边（`blockedEdges`）、回环实时轮次（`loopCounts` / `nodeAttempts`）与待拍板状态（`waitingLead`）。
+3. **Lead「待拍板」权威状态与统一终止**：优先以 `.run.json` 报告的权威状态为准（`need-lead` 高亮 **`⏸ 待拍板`**，`halted` / `done` / `idle` 绝不误回弹锁死），仅在缺失 `.run.json` 时回退到前向边启发式推导；运行中或待拍板时均显示 **`⏹ 终止`** 按钮。
 4. **一键直达真实子对话**：点击任意子代理节点左下角状态胶囊（如 `进行中 ↗` / `已完成 ↗`），客户端调用 `sidebarRight.openResource('dsh-resource://subagentchat/session/<childId>?parent=<sessionId>&mode=<mode>', { kind: 'subagentchat', preferNewPane: true })`，直接在新侧边窗格打开该子代理的真实对话记录。
 
 ---
 
-## 6. Skill 与工具引导机制
+## 6. 会话级强上下文、Skill 与工具引导机制
 
-DSH 不会强制把所有插件文档塞进每次系统提示词，因此插件采用三层协同引导，让模型能稳定、准确地调用画布工具：
-1. **Skill 目录注册**：`index.js` 通过 `ctx.skills.registerProvider` 注册内置技能 `workflow-canvas`，摘要中包含中英触发词（`canvas / workflow / pipeline / 画布 / 工作流 / 编排`）与 4 个 `canvas_*` 工具名；正文读取自 [skills/workflow-canvas/SKILL.md](../skills/workflow-canvas/SKILL.md)。
-2. **工具说明互指**：`canvas_inspect`、`canvas_generate`、`canvas_patch`、`canvas_workflow` 的工具描述均提示模型按需先加载 `workflow-canvas` 技能，而工具定义始终在上下文中。
-3. **项目级锁定（可选）**：在项目 `AGENTS.md` 中加一行显式指令，可在任意对话中实现最高触发稳定性。
+为了让模型在开启画布后稳定、准确地遵循编排而又不污染其它会话或子代理，插件采用四层协同引导：
+1. **会话级 `systemPrompt.context` 强注入**：仅对画布处于「`● 已启用`」的当前主会话（按 `sessionId` 严格匹配，绝不泄漏到子代理）每轮自动注入画布摘要（节点概览、受控回环条数、全局参考数、记忆/权限/断点续跑提示；若暂停在中间 Lead 则注入待拍板说明、`leadResult` / `cancel: true` / `reset: true` 与回环打回理由）。
+2. **Skill 目录注册**：`index.js` 通过 `ctx.skills.registerProvider` 注册内置技能 `workflow-canvas`，摘要中包含中英触发词（`canvas / workflow / 条件分支 / 回环重试 / 画布 / 工作流 / 编排`）与 4 个 `canvas_*` 工具名；正文读取自 [skills/workflow-canvas/SKILL.md](../skills/workflow-canvas/SKILL.md)。
+3. **工具说明互指**：`canvas_inspect`、`canvas_generate`、`canvas_patch`、`canvas_workflow` 的工具描述均提示模型按需先加载 `workflow-canvas` 技能，而工具定义始终在上下文中。
+4. **项目级锁定（可选）**：在项目 `AGENTS.md` 中加一行显式指令，可在任意对话中实现最高触发稳定性。

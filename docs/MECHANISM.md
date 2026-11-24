@@ -12,20 +12,20 @@ at run time, and how memory cold-resume, fallbacks, and live status tracking wor
 ## 1. Architecture: Bidirectional Client ↔ Host Bridge
 
 The plugin splits cleanly into two halves:
-- **Client (`client.js`)**: Mounted as a right-sidebar `Workflow` tab (`keepMounted: true`, preserving state while collapsed). Owns visual editing, presets, shortcuts, visual effects, and live status rendering.
-- **Host (`index.js`)**: Registers the bundled `workflow-canvas` skill, the `/canvas-sync` command, and four tools (`canvas_inspect`, `canvas_generate`, `canvas_patch`, `canvas_workflow`). Owns real subagent execution and durable state persistence.
+- **Client (`client.js`)**: Mounted as a right-sidebar `Workflow` tab (`keepMounted: true`, keyed by `sessionId` for isolation, preserving state while collapsed). Owns visual editing, live cross-tab preset sync, global layout preferences, shortcuts, visual effects, and live status rendering.
+- **Host (`index.js`)**: Registers the bundled `workflow-canvas` skill, per-session `systemPrompt.context`, two commands (`/canvas-sync` and `/canvas-stop`), and four tools (`canvas_inspect`, `canvas_generate`, `canvas_patch`, `canvas_workflow`). Owns real subagent execution, unified cancellation, and durable state persistence.
 
 ```mermaid
 flowchart LR
     subgraph Client["Sidebar Canvas (client.js)"]
-        UI["Graph Editor / Presets / Status Pills"]
+        UI["Graph Editor / Presets / Pills / Stop"]
         LS["localStorage\n(drafts / presets / prefs)"]
         Poll["workspaceFiles Poll\n(every 1.5s)"]
         Cat["subagentCatalog Observer\n(every 700ms while running)"]
     end
 
     subgraph Host["Host Plugin (index.js)"]
-        Sync["/canvas-sync command"]
+        Sync["/canvas-sync & /canvas-stop"]
         Store["Atomic Disk Store\n.workflow-canvas-state.json"]
         Tools["canvas_inspect / generate / patch"]
         Exec["canvas_workflow\nDAG Wave Executor"]
@@ -33,12 +33,12 @@ flowchart LR
     end
 
     UI <--> LS
-    UI -- "enable / sync / turn edge\n/canvas-sync" --> Sync
+    UI -- "enable / sync / stop\n/canvas-sync & /canvas-stop" --> Sync
     Sync --> Store
     Tools -- "writes .dsh/canvas/<sid>.json" --> Poll
     Poll -- "timestamp guard + merge layout" --> UI
     Exec <--> Store
-    Exec -- "startActivation\nlabel#nodeId" --> Sub
+    Exec -- "startActivation / interrupt" --> Sub
     Sub -- "live status & childId" --> Cat
     Cat --> UI
 ```
@@ -69,7 +69,7 @@ When `canvas_workflow` runs, `executePlan` executes the following pipeline:
      - **Condition nodes (`kind: "condition"`)** run as lightweight read-only (`minimal`) judges with a strict structured `outputSchema` (supporting binary `if/else`, multi-way `switch/case`, and `multiMatch` parallel fan-out). Unmatched outgoing edges are blocked and unchosen branches are pruned via ancestor-aware BFS (so an upstream `session-ref` side wire cannot bypass a vetoed branch). If zero branches match or the condition node itself fails, it never guesses a branch — it skips intermediate branches and hands off to the nearest downstream Lead (or halts cleanly if none exists).
      - **Controlled retry loops (`loop: true, maxIterations: 1–10`)**: when a condition matches a loop back-edge (taking priority over forward branches under `multiMatch`), if within per-loop and global safety limits (`20`), the executor resets strictly `descendants(target) ∩ ancestors(source)` (bypass nodes outside the loop never re-run), injects the rejection reason into the entry node (supporting both subagents and Lead nodes), and reuses its healthy warm session with an incremental correction prompt (or starts fresh if the prior round crashed/returned empty). At the limit, it circuit-breaks and hands off `1..N` round summaries to the nearest downstream Lead.
      - Intermediate **non-entry Lead nodes** (including `Lead → Lead` stage chains) pause with `status: "need-lead"`; a **terminal Lead** (zero remaining downstream work) finishes in one shot with `status: "done"` and `finalLead`.
-   - **`retryFailed: true`** and **`fromNodes: [...]`** reuse succeeded outputs from `lastRunBySession` and re-run only failed/target nodes plus their downstream; `reset: true` discards progress and starts from scratch.
+   - **`retryFailed: true`** and **`fromNodes: [...]`** reuse succeeded outputs from `lastRunBySession` and re-run only failed/target nodes plus their downstream; `reset: true` discards progress and starts from scratch; **`cancel: true`** or clicking **`⏹ Stop`** via concurrent `/canvas-stop` (as well as DSH's native chat Stop button) immediately calls `subagents.interrupt(cid, { kind: 'user' })`, `drainDescendants([rootAgent])`, and `rootAgent.cancel({ kind: 'user' }, { keepInbox: true })`, races `abortPromise` out of the pool without spawning fallback retries, preserves completed-node cache, and clears `waitingLead` / `.run.json`.
 
 ```mermaid
 sequenceDiagram
@@ -122,15 +122,16 @@ The three link types are distinct runtime channels, not just visual colour codin
 ## 5. Live Status Pills & Click-to-Open Subagent Chats
 
 1. **Node tagging**: `spawnOnce` tags every spawned child with `label: "<node.label>#<node.id>"`.
-2. **Catalog & run-state telemetry tracking**: While a turn runs (every 700ms, plus on mount and turn completion), the client reads `subagentCatalog` and `subagentTiming` from `sessions.list`, matching `/#([^\s#]+)$/` to map each child back to its canvas node (`running` / `done` / `failed`) and latest `childId`, while also polling `<workspace>/.dsh/canvas/<sid>.run.json` for condition `decisions`, `pruned` nodes, `blockedEdges`, live retry counts (`loopCounts` / `nodeAttempts`), and `waitingLead`.
-3. **Lead `⏸ Ready` detection**: For non-entry Lead nodes, the client highlights **`⏸ Ready`** as soon as all upstream subagents are `done` and no downstream node has started yet.
+2. **Catalog & run-state telemetry tracking**: While a turn runs (every 700ms, plus on mount and turn completion), the client reads `subagentCatalog` and `subagentTiming` from `sessions.list`, matching `/#([^\s#]+)$/` to map each child back to its canvas node (`running` takes strict priority over historical rounds) and latest `childId`, while also polling `<workspace>/.dsh/canvas/<sid>.run.json` for condition `decisions`, `pruned` nodes, `blockedEdges`, live retry counts (`loopCounts` / `nodeAttempts`), and `waitingLead`.
+3. **Authoritative Lead `⏸ Ready` state & unified Stop**: Authoritative `.run.json` status takes precedence (`need-lead` highlights **`⏸ Ready`**; `halted` / `done` / `idle` never re-lock from historical subagent statuses), falling back to forward-edge heuristics only when `.run.json` is absent. Both running and awaiting-Lead states expose the unified **`⏹ Stop`** button.
 4. **Jump to live chat**: Clicking any subagent's bottom-left status pill (e.g. `Running ↗`, `Done ↗`) opens `dsh-resource://subagentchat/session/<childId>?parent=<sessionId>&mode=<mode>` via `sidebarRight.openResource(..., { kind: 'subagentchat', preferNewPane: true })`.
 
 ---
 
-## 6. Skill & Tool Discovery
+## 6. Per-Session Context, Skill & Tool Discovery
 
-Because DSH loads skills on demand rather than auto-injecting every plugin guide, the plugin combines three layers for reliable agent adoption:
-1. **Bundled skill provider**: `index.js` registers `workflow-canvas` via `ctx.skills.registerProvider` with bilingual trigger keywords (`canvas / workflow / pipeline / 画布 / 工作流 / 编排`) and all four `canvas_*` tool names, serving [skills/workflow-canvas/SKILL.md](../skills/workflow-canvas/SKILL.md).
-2. **Tool-level pointers**: Every `canvas_*` tool description reminds the model to load the `workflow-canvas` skill first, and tool schemas are always in context.
-3. **Optional `AGENTS.md` rule**: Adding a single line in a project's `AGENTS.md` guarantees deterministic skill loading in every session.
+To keep the agent aligned with an enabled canvas without leaking instructions into disabled chats or subagents, the plugin combines four layers:
+1. **Per-session `systemPrompt.context` injection**: Strictly scoped by `sessionId` (never injected into subagents), injecting a live canvas summary on each turn (node overview, controlled retry loop count, global refs count, memory/permission/partial-resume hints; or when paused at a Lead step, the pending Lead role, `leadResult` / `cancel: true` / `reset: true`, and any loop rejection feedback).
+2. **Bundled skill provider**: `index.js` registers `workflow-canvas` via `ctx.skills.registerProvider` with bilingual trigger keywords (`canvas / workflow / condition / retry loop / 画布 / 工作流 / 编排`) and all four `canvas_*` tool names, serving [skills/workflow-canvas/SKILL.md](../skills/workflow-canvas/SKILL.md).
+3. **Tool-level pointers**: Every `canvas_*` tool description reminds the model to load the `workflow-canvas` skill first, and tool schemas are always in context.
+4. **Optional `AGENTS.md` rule**: Adding a single line in a project's `AGENTS.md` guarantees deterministic skill loading in every session.
