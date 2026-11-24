@@ -197,7 +197,7 @@ window.__ModuleLoader__.load({
           '10. 点右上角「☰ 预设」可保存当前画布（连同横/竖排方向），多会话实时同步并支持点 ↻ 刷新；切换横/竖排会自动记住默认偏好供新会话沿用。',
           '11. 你可以直接让我改画布：说「把那三个节点的分工改成…」，我会就地修改，不动你摆的位置。',
           '12. session 线连到 Lead 时，我会在暂停那步拿到那个子代理的会话，可以继续追问它。',
-          '13. 按住鼠标中键（或空格 + 左键）拖动画布平移；点击子代理节点左下角状态可直达它的对话记录。',
+          '13. 按住鼠标中键（或空格 + 左键）拖动画布平移；点击子代理节点左下角状态可直达它的对话记录；运行后左下角「复盘」胶囊（或「⋯ → 📊 执行复盘」）可查看耗时、分支与回环记录并复制 Markdown（零额外 Token）。',
           '14. 快捷键与历史：顶栏提供 ↶ 撤销 / ↷ 重做按钮（支持撤销节点移动与横竖排切换）；默认 Shift+A 新建，Shift+D 复制，Delete 删除，Ctrl+Z / Ctrl+Shift+Z（Ctrl+Y）撤销重做，Esc 关闭弹窗（可在「⋯ → 快捷键设置」自定义）。',
         ].join('\n'),
         openChat: '会话',
@@ -314,6 +314,34 @@ window.__ModuleLoader__.load({
         tipMemoryPick: '选择要续接的历史子会话（默认自动沿用最新记忆）',
         tipPreset: '能力范围（点一下切换，受主对话权限上限约束）：standard = 全部工具（读写文件、跑命令、子代理、工作流、网页、办公）；minimal = 只读思考（文件读写关闭，没有子代理/工作流/网页）',
         tipFallback: '失败重试：该节点出错时自动换一个模型再跑一次',
+        runSummaryBtn: '复盘',
+        runSummaryMenu: '📊 执行复盘',
+        runSummaryTitle: '执行复盘摘要',
+        runSummaryEmpty: '当前会话还没有运行记录',
+        runSummaryCopy: '⧉ 复制 MD',
+        runSummaryCopied: '已复制 Markdown 复盘报告',
+        runSummaryElapsed: '总耗时',
+        runSummaryDone: '已完成',
+        runSummaryLoops: '回环重试',
+        runSummaryParallel: '并发上限',
+        runSummaryNodesHead: '节点耗时与状态',
+        runSummaryLoopsHead: '回环记录',
+        runSummaryFallback: '备用回退',
+        runSummaryContinued: '续接会话',
+        runSummaryReused: '缓存复用',
+        runSummaryRuns: '{n} 轮',
+        runSummaryExhausted: '已达上限',
+        runSummaryFocusTip: '点击居中定位到该节点',
+        runSummaryOpenChatTip: '打开该子代理会话',
+        runSummaryTip: '查看本次工作流耗时、节点状态、条件分支与回环复盘（零额外 Token）',
+        runStRunning: '运行中',
+        runStDone: '已完成',
+        runStWaiting: '待拍板',
+        runStHalted: '已终止',
+        runStFailed: '失败',
+        runStEmpty: '空输出',
+        runStPruned: '跳过',
+        runStPending: '未启动',
       },
       en: {
         addAgent: '+ Subagent', addLead: '+ Lead', addCond: '+ Condition', undo: '↶ Undo', redo: '↷ Redo', sync: '↥ Sync',
@@ -393,7 +421,7 @@ window.__ModuleLoader__.load({
           '10. Open ☰ Presets to save the current canvas (including horizontal/vertical direction) — presets sync live across open chats with a manual ↻ refresh button; toggling layout direction is remembered for new sessions.',
           '11. You can ask me to edit the canvas; I patch it in place and keep your layout.',
           '12. A session link into a Lead step hands me that child agent, so I can follow up with it.',
-          '13. Hold the middle mouse button (or Space + drag) to pan; click a subagent status badge at the bottom-left to open its chat.',
+          '13. Hold the middle mouse button (or Space + drag) to pan; click a subagent status badge at the bottom-left to open its chat; click the bottom-left Summary pill (or ⋯ → 📊 Run summary) for live timing, branch & retry breakdown and Markdown export (zero extra tokens).',
           '14. History & shortcuts: toolbar ↶ Undo / ↷ Redo buttons undo structural edits, node drags, and layout flips; Shift+A adds at cursor, Shift+D duplicates, Delete removes, Ctrl+Z / Ctrl+Shift+Z (Ctrl+Y) undo/redo, Esc closes popups (customizable under ⋯ → Shortcuts).',
         ].join('\n'),
         openChat: 'Chat',
@@ -510,6 +538,34 @@ window.__ModuleLoader__.load({
         tipMemoryPick: 'Pick which past child session to resume (defaults to latest)',
         tipPreset: 'Capability (click to toggle; bounded by the main chat permission mode): standard = all tools (files, shells, subagents, workflow, web, office); minimal = read-only thinking (no file writes, no subagents/workflow/web)',
         tipFallback: 'Retry: when this node fails, rerun it once on another model',
+        runSummaryBtn: 'Summary',
+        runSummaryMenu: '📊 Run summary',
+        runSummaryTitle: 'Run Summary',
+        runSummaryEmpty: 'No workflow run recorded in this session yet',
+        runSummaryCopy: '⧉ Copy MD',
+        runSummaryCopied: 'Copied Markdown run summary',
+        runSummaryElapsed: 'Elapsed',
+        runSummaryDone: 'Completed',
+        runSummaryLoops: 'Loop retries',
+        runSummaryParallel: 'Max parallel',
+        runSummaryNodesHead: 'Node timeline',
+        runSummaryLoopsHead: 'Loop history',
+        runSummaryFallback: 'Fallback',
+        runSummaryContinued: 'Continued',
+        runSummaryReused: 'Cached',
+        runSummaryRuns: '{n} runs',
+        runSummaryExhausted: 'Exhausted',
+        runSummaryFocusTip: 'Click to focus this node on canvas',
+        runSummaryOpenChatTip: 'Open child session',
+        runSummaryTip: 'Inspect run timing, node status, branch verdicts & retry history (zero extra tokens)',
+        runStRunning: 'Running',
+        runStDone: 'Completed',
+        runStWaiting: 'Awaiting Lead',
+        runStHalted: 'Halted',
+        runStFailed: 'Failed',
+        runStEmpty: 'Empty',
+        runStPruned: 'Skipped',
+        runStPending: 'Pending',
       },
     };
 
@@ -599,6 +655,45 @@ window.__ModuleLoader__.load({
         padding: '2px 6px', borderRadius: '999px', border: 'none',
         background: 'transparent', color: C.text, fontSize: '11px',
         cursor: 'pointer', whiteSpace: 'nowrap', lineHeight: '16px',
+      },
+      floatSummaryBtn: {
+        position: 'absolute', left: '10px', bottom: '10px', zIndex: 30,
+        display: 'inline-flex', alignItems: 'center', gap: '5px',
+        padding: '4px 10px', borderRadius: '999px',
+        background: C.elevated, color: C.text, border: '1px solid ' + C.border,
+        fontSize: '11px', fontWeight: 600, lineHeight: '16px',
+        cursor: 'pointer', boxShadow: '0 4px 14px rgba(0,0,0,0.28)',
+        maxWidth: 'calc(100% - 118px)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        fontVariantNumeric: 'tabular-nums',
+      },
+      summaryKpiRow: {
+        display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(84px, 1fr))', gap: '6px',
+        marginBottom: '10px', flex: '0 0 auto',
+      },
+      summaryKpi: {
+        padding: '6px 8px', borderRadius: '6px',
+        background: C.raised, border: '1px solid ' + C.border,
+        display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0,
+      },
+      summaryRow: {
+        padding: '7px 8px', borderRadius: '6px', flex: '0 0 auto',
+        background: C.raised, border: '1px solid ' + C.border,
+        display: 'flex', flexDirection: 'column', gap: '4px',
+      },
+      summaryBarTrack: {
+        width: '100%', height: '3px', borderRadius: '2px',
+        background: C.border, overflow: 'hidden', opacity: 0.75,
+      },
+      summaryBarFill: {
+        height: '100%', borderRadius: '2px',
+        transition: 'width 180ms ease',
+      },
+      summaryChip: {
+        display: 'inline-flex', alignItems: 'center', gap: '3px',
+        padding: '1px 5px', borderRadius: '4px',
+        border: '1px solid ' + C.border, background: C.base,
+        color: C.dim, fontSize: '10px', lineHeight: '13px',
+        maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
       },
       ctxDivider: {
         height: '1px', background: C.border, opacity: 0.65, margin: '3px 4px',
@@ -1217,6 +1312,228 @@ window.__ModuleLoader__.load({
         }
       }
       return { leadReadyIds, leadDoneIds };
+    }
+
+    /** Format millisecond durations cleanly for badges, KPI cards and Markdown tables. */
+    function formatDurationMs(ms) {
+      if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return '—';
+      if (ms < 1000) return Math.round(ms) + 'ms';
+      if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
+      const totalSec = Math.round(ms / 1000);
+      const min = Math.floor(totalSec / 60);
+      const sec = totalSec % 60;
+      if (min < 60) return min + 'm ' + sec + 's';
+      const hr = Math.floor(min / 60);
+      const remMin = min % 60;
+      return hr + 'h ' + remMin + 'm';
+    }
+
+    /**
+     * Normalize `.run.json` telemetry into a UI/Markdown view model.
+     * Supports both v1.6 `runState.summary` and older `.run.json` files without `summary`.
+     */
+    function buildRunSummaryView({ runState, nodes, runsById, now, fallbackTiming }) {
+      if (!runState || typeof runState !== 'object' || runState.status === 'idle') {
+        return { hasData: false };
+      }
+      const clock = typeof now === 'number' ? now : Date.now();
+      const canvasNodes = Array.isArray(nodes) ? nodes : [];
+      const byCanvasId = new Map(canvasNodes.map((n) => [n.id, n]));
+      const runMap = runsById && typeof runsById === 'object' ? runsById : {};
+      const sum = runState.summary && typeof runState.summary === 'object' ? runState.summary : null;
+      const status = runState.status || (sum && sum.status) || 'running';
+      const waitingLead = runState.waitingLead || null;
+      const isLive = status === 'running' || status === 'need-lead';
+
+      let rows = [];
+      let minNodeStart = null;
+      let maxNodeEnd = null;
+      if (sum && Array.isArray(sum.nodes) && sum.nodes.length > 0) {
+        rows = sum.nodes.map((entry) => {
+          if (typeof entry.startedAt === 'number' && (minNodeStart === null || entry.startedAt < minNodeStart)) {
+            minNodeStart = entry.startedAt;
+          }
+          if (typeof entry.endedAt === 'number' && (maxNodeEnd === null || entry.endedAt > maxNodeEnd)) {
+            maxNodeEnd = entry.endedAt;
+          }
+          const baseMs = typeof entry.durationMs === 'number' ? entry.durationMs : 0;
+          const liveExtra = (entry.status === 'running' || entry.status === 'waiting')
+            && typeof entry.startedAt === 'number' && !entry.endedAt
+            ? Math.max(0, clock - entry.startedAt)
+            : 0;
+          const totalMs = baseMs + liveExtra;
+          const canvasNode = byCanvasId.get(entry.id);
+          const childRun = runMap[entry.id] || null;
+          const entryStatus = entry.status || 'pending';
+          const isUnrun = entryStatus === 'pruned' || (entryStatus === 'pending' && totalMs === 0);
+          const isZeroLead = (entry.kind || (canvasNode && canvasNode.kind)) === 'lead' && totalMs === 0 && entryStatus !== 'running' && entryStatus !== 'waiting';
+          return {
+            id: entry.id,
+            label: entry.label || (canvasNode && canvasNode.label) || entry.id,
+            kind: entry.kind || (canvasNode && canvasNode.kind) || 'agent',
+            status: entryStatus,
+            durationMs: (isUnrun || isZeroLead) ? null : totalMs,
+            runs: typeof entry.runs === 'number' ? entry.runs : 0,
+            model: entry.model || '',
+            fallbackUsed: Boolean(entry.fallbackUsed),
+            sessionContinued: Boolean(entry.sessionContinued),
+            childId: isUnrun ? '' : (entry.childId || (childRun && childRun.childId) || ''),
+            reason: entry.reason || '',
+            onCanvas: Boolean(canvasNode),
+          };
+        });
+      } else {
+        // Graceful fallback for older `.run.json` payloads written before `summary` existed.
+        const doneSet = new Set(Array.isArray(runState.done) ? runState.done : []);
+        const prunedSet = new Set(Array.isArray(runState.pruned) ? runState.pruned : []);
+        const decisions = runState.decisions && typeof runState.decisions === 'object' ? runState.decisions : {};
+        rows = canvasNodes.filter((n) => n && n.id !== 'lead').map((n) => {
+          const dec = decisions[n.id] || null;
+          const childRun = runMap[n.id] || null;
+          let st = 'pending';
+          if (prunedSet.has(n.id)) st = 'pruned';
+          else if (status === 'need-lead' && waitingLead && waitingLead.id === n.id) st = 'waiting';
+          else if (dec && dec.failed) st = 'failed';
+          else if (doneSet.has(n.id)) st = 'done';
+          const reason = dec
+            ? ((Array.isArray(dec.branchLabels) && dec.branchLabels.length ? dec.branchLabels.join(', ') : (dec.branchLabel || ''))
+              + (dec.reason ? ' — ' + dec.reason : ''))
+            : '';
+          return {
+            id: n.id,
+            label: n.label || n.id,
+            kind: n.kind || 'agent',
+            status: st,
+            durationMs: null,
+            runs: doneSet.has(n.id) ? 1 : 0,
+            model: n.model || '',
+            fallbackUsed: false,
+            sessionContinued: false,
+            childId: (st === 'pruned' || st === 'pending') ? '' : ((childRun && childRun.childId) || ''),
+            reason,
+            onCanvas: true,
+          };
+        });
+      }
+
+      if (!rows.length) return { hasData: false };
+
+      let doneCount = 0;
+      let failedCount = 0;
+      let prunedCount = 0;
+      let runningCount = 0;
+      let maxNodeMs = 0;
+      for (const r of rows) {
+        if (r.status === 'done' || r.status === 'reused') doneCount += 1;
+        else if (r.status === 'failed' || r.status === 'empty') failedCount += 1;
+        else if (r.status === 'pruned') prunedCount += 1;
+        else if (r.status === 'running' || r.status === 'waiting') runningCount += 1;
+        if (typeof r.durationMs === 'number' && r.durationMs > maxNodeMs) maxNodeMs = r.durationMs;
+      }
+
+      const fb = fallbackTiming && typeof fallbackTiming === 'object' ? fallbackTiming : null;
+      const startedAt = (sum && typeof sum.startedAt === 'number')
+        ? sum.startedAt
+        : (minNodeStart !== null ? minNodeStart : (fb && typeof fb.startedAt === 'number' ? fb.startedAt : null));
+      const endedAt = (sum && typeof sum.endedAt === 'number')
+        ? sum.endedAt
+        : (!isLive && maxNodeEnd !== null
+          ? maxNodeEnd
+          : (!isLive && fb && typeof fb.endedAt === 'number' ? fb.endedAt : null));
+      const elapsedMs = startedAt !== null
+        ? Math.max(0, (endedAt !== null ? endedAt : (isLive ? clock : (runState.at || clock))) - startedAt)
+        : (maxNodeMs > 0 ? maxNodeMs : null);
+
+      const loops = sum && Array.isArray(sum.loops) ? sum.loops : [];
+      const totalLoops = sum && typeof sum.totalLoops === 'number'
+        ? sum.totalLoops
+        : loops.reduce((acc, l) => acc + (Number(l && l.used) || 0), 0);
+
+      return {
+        hasData: true,
+        status,
+        isLive,
+        waitingLead,
+        haltedReason: (sum && sum.haltedReason) || '',
+        maxParallel: (sum && typeof sum.maxParallel === 'number') ? sum.maxParallel : null,
+        elapsedMs,
+        totalCount: rows.length,
+        doneCount,
+        failedCount,
+        prunedCount,
+        runningCount,
+        maxNodeMs,
+        totalLoops,
+        loops,
+        nodes: rows,
+      };
+    }
+
+    /** Render a deterministic GitHub-Flavored Markdown report from a run summary view. */
+    function formatRunSummaryMarkdown(view, lang) {
+      if (!view || !view.hasData) return '';
+      const en = lang === 'en';
+      const dict = I18N[en ? 'en' : 'zh'];
+      const statusLabel = (st) => {
+        if (st === 'done') return dict.runStDone;
+        if (st === 'reused') return dict.runSummaryReused;
+        if (st === 'running') return dict.runStRunning;
+        if (st === 'waiting' || st === 'need-lead') return dict.runStWaiting;
+        if (st === 'halted') return dict.runStHalted;
+        if (st === 'failed') return dict.runStFailed;
+        if (st === 'empty') return dict.runStEmpty;
+        if (st === 'pruned') return dict.runStPruned;
+        return dict.runStPending;
+      };
+      const kindLabel = (k) => (k === 'condition' ? (en ? 'Condition' : '条件') : (k === 'lead' ? 'Lead' : (en ? 'Subagent' : '子代理')));
+      const esc = (s) => String(s || '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+      const lines = [
+        '### ' + dict.runSummaryTitle,
+        '',
+        '- **' + (en ? 'Status' : '状态') + '**: ' + statusLabel(view.status)
+          + (view.waitingLead && view.waitingLead.label ? ' (' + view.waitingLead.label + ')' : ''),
+        '- **' + dict.runSummaryElapsed + '**: ' + formatDurationMs(view.elapsedMs),
+        '- **' + (en ? 'Nodes' : '节点') + '**: ' + view.doneCount + '/' + view.totalCount
+          + (view.failedCount ? ' · ' + view.failedCount + ' ' + dict.runStFailed : '')
+          + (view.prunedCount ? ' · ' + view.prunedCount + ' ' + dict.runStPruned : ''),
+        '- **' + dict.runSummaryLoops + '**: ' + view.totalLoops
+          + (view.maxParallel ? ' · **' + dict.runSummaryParallel + '**: ×' + view.maxParallel : ''),
+      ];
+      if (view.haltedReason) {
+        lines.push('- **' + (en ? 'Halt reason' : '终止原因') + '**: ' + esc(view.haltedReason));
+      }
+      lines.push('');
+      lines.push(en
+        ? '| Node | Type | Status | Duration | Runs | Notes |'
+        : '| 节点 | 类型 | 状态 | 耗时 | 轮次 | 备注 |');
+      lines.push('| :--- | :--- | :--- | ---: | ---: | :--- |');
+      for (const n of view.nodes) {
+        const notes = [];
+        if (n.model) notes.push(n.model);
+        if (n.fallbackUsed) notes.push(dict.runSummaryFallback);
+        if (n.sessionContinued) notes.push(dict.runSummaryContinued);
+        if (n.reason) notes.push(n.reason);
+        lines.push(
+          '| ' + esc(n.label)
+          + ' | ' + kindLabel(n.kind)
+          + ' | ' + statusLabel(n.status)
+          + ' | ' + formatDurationMs(n.durationMs)
+          + ' | ' + (n.runs > 0 ? String(n.runs) : '—')
+          + ' | ' + esc(notes.join(' · '))
+          + ' |',
+        );
+      }
+      if (view.loops && view.loops.length) {
+        lines.push('');
+        lines.push('#### ' + dict.runSummaryLoopsHead);
+        for (const lp of view.loops) {
+          lines.push('- **' + esc(lp.fromLabel) + ' ↺ ' + esc(lp.toLabel) + '** (' + lp.used + '/' + lp.max + (lp.exhausted ? ' · ' + dict.runSummaryExhausted : '') + ')');
+          for (const r of (lp.rounds || [])) {
+            lines.push('  - R' + r.round + ': ' + esc(r.reason));
+          }
+        }
+      }
+      return lines.join('\n');
     }
 
     function isCustomBranches(node) {
@@ -2610,6 +2927,9 @@ window.__ModuleLoader__.load({
       const [menuAlign, setMenuAlign] = useState('right');
       const [presetAlign, setPresetAlign] = useState('right');
       const [helpOpen, setHelpOpen] = useState(false);
+      const [summaryOpen, setSummaryOpen] = useState(false);
+      const [summaryNow, setSummaryNow] = useState(() => Date.now());
+      const clientRunTimingRef = useRef({ startedAt: null, endedAt: null, prevStatus: '', runAt: null });
       const [shortcuts, setShortcuts] = useState(loadShortcuts);
       const shortcutsRef = useRef(shortcuts);
       shortcutsRef.current = shortcuts;
@@ -2983,10 +3303,14 @@ window.__ModuleLoader__.load({
           await Promise.all(tasks);
           runTriggeringRef.current = false;
           setRunTriggering(false);
+          const stopNow = Date.now();
           setRunState((prev) => ({
             ...(prev || {}),
             status: 'halted',
             waitingLead: null,
+            ...(prev && prev.summary
+              ? { summary: { ...prev.summary, status: 'halted', endedAt: prev.summary.endedAt || stopNow } }
+              : {}),
           }));
           setStatusById((prev) => {
             const next = {};
@@ -3249,6 +3573,13 @@ window.__ModuleLoader__.load({
         centerOn(lead.x + NODE_W / 2, lead.y + NODE_H / 2, nextK);
       };
 
+      const focusNode = (nodeId) => {
+        const target = nodesRef.current.find((n) => n.id === nodeId);
+        if (!target) return;
+        setSelectedIds([target.id]);
+        centerOn(target.x + NODE_W / 2, target.y + nodeHeight(target) / 2);
+      };
+
       /** Horizontal drag scrubber on the percentage pill; pure click resets to 100% on Lead. */
       const onZoomPillDown = (e) => {
         if (e.button !== 0) return;
@@ -3408,7 +3739,7 @@ window.__ModuleLoader__.load({
         }
       };
 
-      const openNodeSession = async (node) => {
+      const openNodeSession = async (node, fallbackChildId) => {
         let run = runsById[node.id];
         if (!run) {
           const sessions = hostCtx && hostCtx.sessions;
@@ -3421,6 +3752,9 @@ window.__ModuleLoader__.load({
             setRunsById(nextRuns);
             run = nextRuns[node.id];
           }
+        }
+        if (!run && fallbackChildId) {
+          run = { childId: fallbackChildId, mode: 'local', label: node.label || node.id };
         }
         if (!run) { flash(t('cannotOpen')); return; }
         openRun(node, run);
@@ -3763,12 +4097,7 @@ window.__ModuleLoader__.load({
         flash(t('clearedCanvas'));
       };
 
-      const exportToClipboard = () => {
-        const cleanNodes = nodesRef.current.map((n) => {
-          const { runs: _runs, ...rest } = n;
-          return rest;
-        });
-        const text = JSON.stringify({ nodes: cleanNodes, edges: edgesRef.current, direction: directionRef.current }, null, 2);
+      const copyTextToClipboard = (text, okMsg) => {
         const fallbackCopy = () => {
           try {
             const ta = document.createElement('textarea');
@@ -3779,18 +4108,33 @@ window.__ModuleLoader__.load({
             ta.select();
             const ok = document.execCommand && document.execCommand('copy');
             document.body.removeChild(ta);
-            flash(ok ? t('exportOk') : t('exportFail'));
+            flash(ok ? okMsg : t('exportFail'));
           } catch (_e) {
             flash(t('exportFail'));
           }
         };
         try {
           if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(text).then(() => flash(t('exportOk')), fallbackCopy);
+            navigator.clipboard.writeText(text).then(() => flash(okMsg), fallbackCopy);
             return;
           }
         } catch (_e) { /* fall through */ }
         fallbackCopy();
+      };
+
+      const exportToClipboard = () => {
+        const cleanNodes = nodesRef.current.map((n) => {
+          const { runs: _runs, ...rest } = n;
+          return rest;
+        });
+        const text = JSON.stringify({ nodes: cleanNodes, edges: edgesRef.current, direction: directionRef.current }, null, 2);
+        copyTextToClipboard(text, t('exportOk'));
+      };
+
+      const copyRunSummary = (view) => {
+        const md = formatRunSummaryMarkdown(view, lang);
+        if (!md) { flash(t('runSummaryEmpty')); return; }
+        copyTextToClipboard(md, t('runSummaryCopied'));
       };
 
       const openAddMenuAtCursor = () => {
@@ -4109,9 +4453,16 @@ window.__ModuleLoader__.load({
       const keyActionsRef = useRef(null);
       keyActionsRef.current = {
         undo, redo, deleteSelected, duplicateSelected, openAddMenuAtCursor, addNode, fitView, autoLayout, toggleDirection, flash, t,
-        addMenu, ctxMenu, loopEditEdgeId, roleEditFor, openModelFor, menuOpen, presetOpen, helpOpen, shortcutsOpen, recordingAction, decisionViewFor, refsEditFor,
-        setAddMenu, setCtxMenu, setLoopEditEdgeId, setRoleEditFor, setOpenModelFor, setMenuOpen, setPresetOpen, setHelpOpen, setShortcutsOpen, setRecordingAction, setShortcuts, setDecisionViewFor, setRefsEditFor,
+        addMenu, ctxMenu, loopEditEdgeId, roleEditFor, openModelFor, menuOpen, presetOpen, helpOpen, summaryOpen, shortcutsOpen, recordingAction, decisionViewFor, refsEditFor,
+        setAddMenu, setCtxMenu, setLoopEditEdgeId, setRoleEditFor, setOpenModelFor, setMenuOpen, setPresetOpen, setHelpOpen, setSummaryOpen, setShortcutsOpen, setRecordingAction, setShortcuts, setDecisionViewFor, setRefsEditFor,
       };
+      const summaryIsLive = Boolean(runState && (runState.status === 'running' || runState.status === 'need-lead'));
+      useEffect(() => {
+        if (!summaryIsLive) return undefined;
+        setSummaryNow(Date.now());
+        const timer = setInterval(() => setSummaryNow(Date.now()), 1000);
+        return () => clearInterval(timer);
+      }, [summaryIsLive, summaryOpen]);
       useEffect(() => {
         const isEditable = (target) => {
           if (!target || !(target instanceof HTMLElement)) return false;
@@ -4139,7 +4490,7 @@ window.__ModuleLoader__.load({
             return;
           }
           if (ev.key === 'Escape') {
-            if (act.addMenu || act.ctxMenu || act.loopEditEdgeId || act.roleEditFor || act.openModelFor || act.menuOpen || act.presetOpen || act.helpOpen || act.shortcutsOpen || act.decisionViewFor || act.refsEditFor) {
+            if (act.addMenu || act.ctxMenu || act.loopEditEdgeId || act.roleEditFor || act.openModelFor || act.menuOpen || act.presetOpen || act.helpOpen || act.summaryOpen || act.shortcutsOpen || act.decisionViewFor || act.refsEditFor) {
               ev.preventDefault();
               act.setAddMenu(null);
               act.setCtxMenu(null);
@@ -4149,6 +4500,7 @@ window.__ModuleLoader__.load({
               act.setMenuOpen(false);
               act.setPresetOpen(null);
               act.setHelpOpen(false);
+              act.setSummaryOpen(false);
               act.setShortcutsOpen(false);
               act.setRecordingAction(null);
               act.setDecisionViewFor(null);
@@ -4156,7 +4508,7 @@ window.__ModuleLoader__.load({
             }
             return;
           }
-          if (act.shortcutsOpen) return;
+          if (act.shortcutsOpen || act.summaryOpen || act.helpOpen) return;
           if (isEditable(ev.target)) return;
           if (act.addMenu) {
             const lf = act.addMenu.linkFrom || null;
@@ -5099,6 +5451,51 @@ window.__ModuleLoader__.load({
       const nodeAttemptsMap = (enabled && runState && runState.nodeAttempts && typeof runState.nodeAttempts === 'object')
         ? runState.nodeAttempts
         : {};
+      // Client-side fallback wall-clock tracking in case an older backend `.run.json` omits `summary.startedAt`.
+      // Never synthesize startedAt from `runState.at` (which is the write/finish timestamp of `.run.json`).
+      (() => {
+        const curSt = runState && typeof runState.status === 'string' ? runState.status : '';
+        const curAt = runState && typeof runState.at === 'number' ? runState.at : null;
+        const tr = clientRunTimingRef.current;
+        if (!curSt || curSt === 'idle') {
+          tr.startedAt = null;
+          tr.endedAt = null;
+          tr.runAt = null;
+          tr.prevStatus = curSt;
+        } else if (curSt === 'running' && tr.prevStatus !== 'running' && tr.prevStatus !== 'need-lead') {
+          tr.startedAt = (runState && runState.summary && typeof runState.summary.startedAt === 'number')
+            ? runState.summary.startedAt
+            : Date.now();
+          tr.endedAt = null;
+          tr.runAt = curAt;
+          tr.prevStatus = curSt;
+        } else if (curSt === 'done' || curSt === 'halted') {
+          if (tr.prevStatus === 'running' || tr.prevStatus === 'need-lead') {
+            if (tr.startedAt !== null) {
+              tr.endedAt = (runState && runState.summary && typeof runState.summary.endedAt === 'number')
+                ? runState.summary.endedAt
+                : Date.now();
+              tr.runAt = curAt;
+            }
+          } else if (curAt !== null && tr.runAt !== null && curAt !== tr.runAt) {
+            // A fresh terminal `.run.json` arrived without observing a `running` poll in between:
+            // drop any prior run's client clock rather than mixing two different runs.
+            tr.startedAt = null;
+            tr.endedAt = null;
+            tr.runAt = curAt;
+          }
+          tr.prevStatus = curSt;
+        } else {
+          tr.prevStatus = curSt;
+        }
+      })();
+      const runSummary = buildRunSummaryView({
+        runState,
+        nodes,
+        runsById,
+        now: summaryNow,
+        fallbackTiming: clientRunTimingRef.current,
+      });
       const loopGroups = loopGroupsForUI(nodes, edges);
       const edgeKeyForState = (e) => String(e.from) + '->' + String(e.to) + '|' + String(e.type || 'prompt') + '|' + String(e.branch || '');
       const loopPillItems = [];
@@ -5809,6 +6206,12 @@ window.__ModuleLoader__.load({
                   style: S.moreRow,
                   onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
                   onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+                  onClick: () => { setMenuOpen(false); setSummaryNow(Date.now()); setSummaryOpen(true); },
+                }, t('runSummaryMenu')),
+                h('div', {
+                  style: S.moreRow,
+                  onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+                  onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
                   onClick: () => { setMenuOpen(false); setRecordingAction(null); setShortcutsOpen(true); },
                 }, t('shortcutsMenu')),
                 h('div', {
@@ -5833,6 +6236,165 @@ window.__ModuleLoader__.load({
             h('div', { style: S.helpBody }, t('helpBody').split('\n').map((line, i) => h('div', { key: i, style: S.helpLine }, line))),
           ),
         ),
+        summaryOpen && (() => {
+          const stVisual = (st) => {
+            if (st === 'done') return { icon: '✓', color: '#3fb950', label: t('runStDone') };
+            if (st === 'reused') return { icon: '⚡', color: '#3fb950', label: t('runSummaryReused') };
+            if (st === 'running') return { icon: '●', color: '#2f81f7', label: t('runStRunning') };
+            if (st === 'waiting' || st === 'need-lead') return { icon: '⏸', color: '#2f81f7', label: t('runStWaiting') };
+            if (st === 'halted') return { icon: '⏹', color: '#e5534b', label: t('runStHalted') };
+            if (st === 'failed') return { icon: '✕', color: '#e5534b', label: t('runStFailed') };
+            if (st === 'empty') return { icon: '⚠', color: '#d29922', label: t('runStEmpty') };
+            if (st === 'pruned') return { icon: '↷', color: C.dim, label: t('runStPruned') };
+            return { icon: '○', color: C.dim, label: t('runStPending') };
+          };
+          const topSt = runSummary.hasData ? stVisual(runSummary.status) : null;
+          return h('div', {
+            style: S.helpOverlay,
+            onMouseDown: (e) => { e.stopPropagation(); if (e.target === e.currentTarget) setSummaryOpen(false); },
+          },
+            h('div', { style: { ...S.helpCard, maxWidth: '460px', display: 'flex', flexDirection: 'column', maxHeight: '82%', overflow: 'hidden' } },
+              h('div', { style: { ...S.helpHead, flex: '0 0 auto' } },
+                h('span', { style: { ...S.helpTitle, display: 'inline-flex', alignItems: 'center', gap: '6px', minWidth: 0 } },
+                  h('span', null, t('runSummaryTitle')),
+                  topSt && h('span', {
+                    style: {
+                      fontSize: '10px', fontWeight: 600, padding: '1px 6px', borderRadius: '999px',
+                      color: topSt.color, border: '1px solid ' + topSt.color,
+                      whiteSpace: 'nowrap',
+                    },
+                  }, topSt.icon + ' ' + topSt.label),
+                ),
+                runSummary.hasData && h('button', {
+                  style: S.btn,
+                  type: 'button',
+                  onClick: () => copyRunSummary(runSummary),
+                }, t('runSummaryCopy')),
+                h('button', {
+                  style: S.btn,
+                  type: 'button',
+                  onClick: () => setSummaryOpen(false),
+                }, t('close')),
+              ),
+              !runSummary.hasData
+                ? h('div', { style: { padding: '18px 8px', textAlign: 'center', color: C.dim, fontSize: '12px' } }, t('runSummaryEmpty'))
+                : h(React.Fragment, null,
+                    h('div', { style: S.summaryKpiRow },
+                      h('div', { style: S.summaryKpi },
+                        h('span', { style: { fontSize: '10px', color: C.dim } }, t('runSummaryElapsed')),
+                        h('span', { style: { fontSize: '13px', fontWeight: 600, color: C.text, fontVariantNumeric: 'tabular-nums' } }, formatDurationMs(runSummary.elapsedMs)),
+                      ),
+                      h('div', { style: S.summaryKpi },
+                        h('span', { style: { fontSize: '10px', color: C.dim } }, t('runSummaryDone')),
+                        h('span', { style: { fontSize: '13px', fontWeight: 600, color: runSummary.failedCount ? '#e5534b' : '#3fb950', fontVariantNumeric: 'tabular-nums' } },
+                          runSummary.doneCount + '/' + runSummary.totalCount),
+                      ),
+                      h('div', { style: S.summaryKpi },
+                        h('span', { style: { fontSize: '10px', color: C.dim } }, t('runSummaryLoops')),
+                        h('span', { style: { fontSize: '13px', fontWeight: 600, color: runSummary.totalLoops ? '#d29922' : C.text, fontVariantNumeric: 'tabular-nums' } }, String(runSummary.totalLoops)),
+                      ),
+                      h('div', { style: S.summaryKpi },
+                        h('span', { style: { fontSize: '10px', color: C.dim } }, t('runSummaryParallel')),
+                        h('span', { style: { fontSize: '13px', fontWeight: 600, color: C.text, fontVariantNumeric: 'tabular-nums' } }, '×' + (runSummary.maxParallel || maxParallel)),
+                      ),
+                    ),
+                    h('div', { style: { flex: '1 1 auto', minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px', paddingRight: '2px' } },
+                    runSummary.haltedReason && h('div', {
+                      style: {
+                        flex: '0 0 auto', padding: '6px 8px', borderRadius: '6px', fontSize: '11px', lineHeight: '1.45',
+                        color: '#e5534b', background: 'rgba(229,83,75,0.12)', border: '1px solid rgba(229,83,75,0.4)',
+                      },
+                    }, '⏹ ' + runSummary.haltedReason),
+                    runSummary.status === 'need-lead' && runSummary.waitingLead && h('div', {
+                      style: {
+                        flex: '0 0 auto', padding: '6px 8px', borderRadius: '6px', fontSize: '11px', lineHeight: '1.45',
+                        color: '#2f81f7', background: 'rgba(47,129,247,0.12)', border: '1px solid rgba(47,129,247,0.4)',
+                      },
+                    }, '⏸ ' + t('runStWaiting') + ': ' + (runSummary.waitingLead.label || runSummary.waitingLead.id)),
+                    h('div', { style: { flex: '0 0 auto', fontSize: '11px', fontWeight: 600, color: C.dim } }, t('runSummaryNodesHead')),
+                    h('div', { style: { display: 'flex', flexDirection: 'column', gap: '5px' } },
+                      runSummary.nodes.map((n) => {
+                        const sv = stVisual(n.status);
+                        const barPct = (typeof n.durationMs === 'number' && n.durationMs > 0 && runSummary.maxNodeMs > 0)
+                          ? Math.max(4, Math.min(100, Math.round((n.durationMs / runSummary.maxNodeMs) * 100)))
+                          : 0;
+                        const kindMeta = n.kind === 'condition'
+                          ? { label: lang === 'en' ? 'Cond' : '条件', color: '#d29922', border: 'rgba(210,153,34,0.45)' }
+                          : n.kind === 'lead'
+                            ? { label: 'Lead', color: '#2f81f7', border: 'rgba(47,129,247,0.45)' }
+                            : { label: lang === 'en' ? 'Agent' : '子代理', color: '#3fb950', border: 'rgba(63,185,80,0.45)' };
+                        return h('div', { key: n.id, style: S.summaryRow },
+                          h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 } },
+                            h('span', { style: { color: sv.color, fontSize: '11px', fontWeight: 700, flex: '0 0 auto' }, title: sv.label }, sv.icon),
+                            h('button', {
+                              type: 'button',
+                              disabled: !n.onCanvas,
+                              title: n.onCanvas ? t('runSummaryFocusTip') : undefined,
+                              style: {
+                                flex: '1 1 auto', minWidth: 0, textAlign: 'left', padding: 0,
+                                border: 'none', background: 'transparent', color: C.text,
+                                fontSize: '11px', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                cursor: n.onCanvas ? 'pointer' : 'default',
+                              },
+                              onClick: () => { if (n.onCanvas) { focusNode(n.id); setSummaryOpen(false); } },
+                            }, n.label),
+                            h('span', { style: { ...S.summaryChip, color: kindMeta.color, borderColor: kindMeta.border, flex: '0 0 auto' } }, kindMeta.label),
+                            h('span', { style: { fontSize: '11px', color: C.dim, fontVariantNumeric: 'tabular-nums', flex: '0 0 auto' } }, formatDurationMs(n.durationMs)),
+                            n.childId && h('button', {
+                              type: 'button',
+                              title: t('runSummaryOpenChatTip'),
+                              style: { ...S.condAddBtn, padding: '0 5px', height: '18px', flex: '0 0 auto' },
+                              onClick: () => {
+                                setSummaryOpen(false);
+                                const targetNode = nodeById.get(n.id) || { id: n.id, label: n.label };
+                                openNodeSession(targetNode, n.childId);
+                              },
+                            }, '↗'),
+                          ),
+                          barPct > 0 && h('div', { style: S.summaryBarTrack },
+                            h('div', { style: { ...S.summaryBarFill, width: barPct + '%', background: sv.color } }),
+                          ),
+                          (n.model || n.fallbackUsed || n.sessionContinued || n.runs > 1 || n.status === 'reused' || n.reason) && h('div', {
+                            style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px' },
+                          },
+                            n.model && h('span', { style: S.summaryChip }, n.model),
+                            n.runs > 1 && h('span', { style: { ...S.summaryChip, color: '#d29922' } }, t('runSummaryRuns').replace('{n}', String(n.runs))),
+                            n.fallbackUsed && h('span', { style: { ...S.summaryChip, color: '#d29922' } }, t('runSummaryFallback')),
+                            n.sessionContinued && h('span', { style: { ...S.summaryChip, color: '#a371f7' } }, t('runSummaryContinued')),
+                            n.status === 'reused' && h('span', { style: { ...S.summaryChip, color: '#3fb950' } }, t('runSummaryReused')),
+                            n.reason && h('span', {
+                              style: {
+                                fontSize: '10px', lineHeight: '1.35',
+                                color: n.status === 'failed' ? '#e5534b' : C.dim,
+                                wordBreak: 'break-word',
+                              },
+                            }, n.reason),
+                          ),
+                        );
+                      }),
+                    ),
+                    runSummary.loops.length > 0 && h(React.Fragment, null,
+                      h('div', { style: { flex: '0 0 auto', fontSize: '11px', fontWeight: 600, color: C.dim, marginTop: '2px' } }, t('runSummaryLoopsHead')),
+                      h('div', { style: { display: 'flex', flexDirection: 'column', gap: '5px', flex: '0 0 auto' } },
+                        runSummary.loops.map((lp, idx) => h('div', { key: idx, style: S.summaryRow },
+                          h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
+                            h('span', { style: { fontSize: '11px', fontWeight: 600, color: '#d29922', flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                              lp.fromLabel + ' ↺ ' + lp.toLabel),
+                            h('span', { style: { ...S.summaryChip, color: lp.exhausted ? '#e5534b' : '#d29922' } },
+                              lp.used + '/' + lp.max + (lp.exhausted ? ' · ' + t('runSummaryExhausted') : '')),
+                          ),
+                          (lp.rounds || []).map((r, rIdx) => h('div', {
+                            key: rIdx,
+                            style: { fontSize: '10px', color: C.dim, lineHeight: '1.4', paddingLeft: '6px', borderLeft: '2px solid ' + C.border },
+                          }, 'R' + r.round + ': ' + r.reason)),
+                        )),
+                      ),
+                    ),
+                    ),
+                  ),
+            ),
+          );
+        })(),
         shortcutsOpen && (() => {
           const actionLabels = {
             addNode: t('scAddNode'),
@@ -6095,6 +6657,42 @@ window.__ModuleLoader__.load({
               h('div', { style: S.ctxDivider }),
               menuRow('imp', t('importBtn'), () => { setCtxMenu(null); importFromClipboard(); }),
               menuRow('clr', t('clearCanvasBtn'), () => { setCtxMenu(null); clearCanvas(); }, { danger: true }),
+            );
+          })(),
+          runSummary.hasData && (() => {
+            const pillIcon = runSummary.status === 'done' ? '✓'
+              : runSummary.status === 'running' ? '●'
+                : runSummary.status === 'need-lead' ? '⏸'
+                  : '⏹';
+            const pillColor = runSummary.status === 'done'
+              ? (runSummary.failedCount ? '#d29922' : '#3fb950')
+              : runSummary.status === 'running' || runSummary.status === 'need-lead'
+                ? '#2f81f7'
+                : '#e5534b';
+            const elapsedText = runSummary.elapsedMs !== null ? ' · ' + formatDurationMs(runSummary.elapsedMs) : '';
+            const loopText = runSummary.totalLoops > 0 ? ' · ↺' + runSummary.totalLoops : '';
+            return h('button', {
+              type: 'button',
+              style: { ...S.floatSummaryBtn, borderColor: runSummary.isLive ? pillColor : C.border },
+              title: t('runSummaryTip'),
+              onMouseDown: (e) => e.stopPropagation(),
+              onMouseEnter: (e) => { e.currentTarget.style.borderColor = pillColor; },
+              onMouseLeave: (e) => { e.currentTarget.style.borderColor = runSummary.isLive ? pillColor : C.border; },
+              onClick: () => {
+                setMenuOpen(false);
+                setPresetOpen(null);
+                setCtxMenu(null);
+                setAddMenu(null);
+                setLoopEditEdgeId(null);
+                setOpenModelFor(null);
+                setSummaryNow(Date.now());
+                setSummaryOpen(true);
+              },
+            },
+              h('span', { style: { color: pillColor, flex: '0 0 auto' } }, pillIcon),
+              h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 } },
+                t('runSummaryBtn') + ' · ' + runSummary.doneCount + '/' + runSummary.totalCount + loopText),
+              elapsedText && h('span', { style: { flex: '0 0 auto', color: C.dim, fontVariantNumeric: 'tabular-nums' } }, elapsedText),
             );
           })(),
           h('div', {
@@ -6777,7 +7375,7 @@ window.__ModuleLoader__.load({
           try { console.error('[workflow-canvas] apply failed', error); } catch (_e) { /* ignore */ }
         }
       },
-      __test: { I18N, S, topoOrder, wouldCycle, soloLeadNodeIds, layoutGraph, builtinTemplates, deadEndNodeIds, nextEffectLevel, nextMaxParallel, dropdownAlign, zoomAroundPoint, scrubZoom, applyPanStep, normalizeDirection, loadDefaultDirection, saveDefaultDirection, loadPresets, savePresets, buildPlan, loadDoc, saveDoc, storageKey, socketCenterY, nodeHeight, conditionBranchesForUI, distanceToEdge, edgeCurve, compatibleTargetsForWire, conditionVerdictSummary, entryRunButtonState, stopButtonState, deriveLeadStatuses, outputSocketX, inputSocketPos, outputSocketPos, normalizeRefsUI, clampMenuPos, cloneSelection, nextSelectionOnNodeClick, DEFAULT_SHORTCUTS, normalizeShortcut, formatShortcutFromEvent, matchesShortcut, applyShortcutBinding, normalizeMaxIterationsUI, loopMemberIdsUI, loopGroupsForUI, pruneInvalidLoopEdges, canLinkAsLoop, analyzeLoopSelection, loopEdgeArc },
+      __test: { I18N, S, topoOrder, wouldCycle, soloLeadNodeIds, layoutGraph, builtinTemplates, deadEndNodeIds, nextEffectLevel, nextMaxParallel, dropdownAlign, zoomAroundPoint, scrubZoom, applyPanStep, normalizeDirection, loadDefaultDirection, saveDefaultDirection, loadPresets, savePresets, buildPlan, loadDoc, saveDoc, storageKey, socketCenterY, nodeHeight, conditionBranchesForUI, distanceToEdge, edgeCurve, compatibleTargetsForWire, conditionVerdictSummary, entryRunButtonState, stopButtonState, deriveLeadStatuses, formatDurationMs, buildRunSummaryView, formatRunSummaryMarkdown, outputSocketX, inputSocketPos, outputSocketPos, normalizeRefsUI, clampMenuPos, cloneSelection, nextSelectionOnNodeClick, DEFAULT_SHORTCUTS, normalizeShortcut, formatShortcutFromEvent, matchesShortcut, applyShortcutBinding, normalizeMaxIterationsUI, loopMemberIdsUI, loopGroupsForUI, pruneInvalidLoopEdges, canLinkAsLoop, analyzeLoopSelection, loopEdgeArc },
     };
   },
 });

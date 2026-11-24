@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "Workflow canvas",
-    "description": "Visually orchestrate subagents, conditional branching, Lead gates, and controlled retry loops.",
+    "description": "Visually orchestrate subagents, conditional branching, Lead gates, controlled retry loops & zero-token run summaries.",
     "detail": "docs/DETAIL.md"
   }
 }

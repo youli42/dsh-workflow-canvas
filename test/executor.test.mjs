@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { apply, orderNodes, upstreamOf, downstreamLabels, briefFor, parseConditionDecision, withoutEntry, analyzeCanvasWarnings, normalizeCanvas, applyPatch, inspectPlan, sessionIdFromContext, buildActiveCanvasContext, isPermissionFailure, abortSessionRun, loopMemberIds, validateLoopEdges, executePlan } from '../index.js';
+import { apply, orderNodes, upstreamOf, downstreamLabels, briefFor, parseConditionDecision, withoutEntry, analyzeCanvasWarnings, normalizeCanvas, applyPatch, inspectPlan, sessionIdFromContext, buildActiveCanvasContext, isPermissionFailure, buildRunSummarySnapshot, abortSessionRun, loopMemberIds, validateLoopEdges, executePlan } from '../index.js';
 
 test('withoutEntry strips the entry Lead', () => {
   const nodes = [
@@ -2153,4 +2153,211 @@ test('loop retry un-prunes outside branch pruned by an inner condition on round 
   assert.equal(res.status, 'done');
   assert.ok(spawned.includes('alt_exit'), 'outside branch pruned on round 1 must un-prune and run when chosen on round 2');
   assert.equal(res.results.alt_exit, 'out:alt_exit');
+});
+
+test('executePlan publishes zero-token .run.json summary with timings, fallback, loops & halt finalization', async () => {
+  const { mkdtempSync, readFileSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-wc-summary-'));
+  try {
+    const sid = 's-summary-' + Date.now();
+    let implCalls = 0;
+    let gateCalls = 0;
+    const scope = {
+      sessions: {
+        get: (id) => (id === sid ? { header: { cwd: dir } } : null),
+      },
+      subagents: {
+        startActivation: (req) => {
+          const id = String((req && req.label) || '').split('#').pop();
+          if (id === 'impl') {
+            implCalls += 1;
+            // Fail primary on first attempt so fallbackModel rescues it
+            if (implCalls === 1 && !req.model) {
+              return Promise.resolve({
+                childId: 'kid-impl-fail',
+                result: Promise.resolve({ output: [{ type: 'text', text: 'transient error' }], stopReason: 'error' }),
+                dispose: () => Promise.resolve(),
+              });
+            }
+            return Promise.resolve({
+              childId: 'kid-impl-' + implCalls,
+              result: new Promise((r) => setTimeout(() => r({ output: [{ type: 'text', text: 'impl ok #' + implCalls }], stopReason: 'completed' }), 15)),
+              dispose: () => Promise.resolve(),
+            });
+          }
+          if (id === 'gate') {
+            gateCalls += 1;
+            const pass = gateCalls >= 2;
+            return Promise.resolve({
+              childId: 'kid-gate-' + gateCalls,
+              result: Promise.resolve({
+                structured: { pass, reason: pass ? 'all green' : 'fix edge case' },
+                output: [{ type: 'text', text: '' }],
+                stopReason: 'completed',
+              }),
+              dispose: () => Promise.resolve(),
+            });
+          }
+          return Promise.resolve({
+            childId: 'kid-' + id,
+            result: Promise.resolve({ output: [{ type: 'text', text: 'ok:' + id }], stopReason: 'completed' }),
+            dispose: () => Promise.resolve(),
+          });
+        },
+      },
+    };
+    const plan = {
+      task: '执行复盘遥测测试',
+      maxParallel: 3,
+      nodes: [
+        { id: 'impl', kind: 'agent', label: '实现', role: '实现', fallbackModel: 'backup-m' },
+        { id: 'gate', kind: 'condition', label: '门禁', role: '门禁' },
+        { id: 'final', kind: 'lead', label: '终审', role: '终审' },
+      ],
+      edges: [
+        { from: 'lead', to: 'impl', type: 'prompt' },
+        { from: 'impl', to: 'gate', type: 'prompt' },
+        { from: 'gate', to: 'final', type: 'prompt', branch: 'true' },
+        { from: 'gate', to: 'impl', type: 'prompt', branch: 'false', loop: true, maxIterations: 3 },
+      ],
+    };
+    const res = await executePlan(scope, plan, {}, { agent: { id: sid }, signal: new AbortController().signal });
+    assert.equal(res.status, 'done');
+
+    const runFile = JSON.parse(readFileSync(join(dir, '.dsh', 'canvas', sid + '.run.json'), 'utf8'));
+    assert.equal(runFile.status, 'done');
+    assert.ok(runFile.summary, '.run.json must carry structured summary');
+    assert.equal(runFile.summary.status, 'done');
+    assert.equal(runFile.summary.maxParallel, 3);
+    assert.equal(runFile.summary.totalLoops, 1);
+    assert.ok(typeof runFile.summary.startedAt === 'number' && typeof runFile.summary.endedAt === 'number');
+    assert.ok(runFile.summary.endedAt >= runFile.summary.startedAt);
+
+    const implStat = runFile.summary.nodes.find((n) => n.id === 'impl');
+    assert.ok(implStat);
+    assert.equal(implStat.status, 'done');
+    assert.equal(implStat.runs, 2, 'impl executed across 2 loop rounds');
+    assert.equal(implStat.fallbackUsed, true, 'records fallback model rescue');
+    assert.ok(implStat.durationMs >= 10, 'records cumulative durationMs');
+    assert.ok(implStat.childId, 'records childId for direct chat jump');
+
+    const finalStat = runFile.summary.nodes.find((n) => n.id === 'final');
+    assert.equal(finalStat.kind, 'lead');
+    assert.equal(finalStat.status, 'done');
+
+    assert.equal(runFile.summary.loops.length, 1);
+    assert.equal(runFile.summary.loops[0].used, 1);
+    assert.equal(runFile.summary.loops[0].rounds[0].reason, 'fix edge case');
+
+    // Verify halted snapshot finalizes still-running node cleanly
+    const haltedSnap = buildRunSummarySnapshot({
+      startedAt: 1000,
+      orderIds: ['a'],
+      nodeMeta: { a: { label: 'A', kind: 'agent', model: 'm1' } },
+      nodeStats: { a: { id: 'a', label: 'A', kind: 'agent', status: 'running', startedAt: 2000, endedAt: null, durationMs: 500, runs: 1 } },
+      pruned: new Set(),
+      decisions: {},
+      failed: {},
+      emptyOutputs: {},
+    }, { status: 'halted', haltedReason: '用户主动终止', now: 3500 });
+    assert.equal(haltedSnap.nodes[0].status, 'halted');
+    assert.equal(haltedSnap.nodes[0].durationMs, 2000);
+    assert.equal(haltedSnap.haltedReason, '用户主动终止');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('condition node auto-retries without outputSchema on provider error and exposes real error without misleading fallback wording', async () => {
+  const gateSpecs = [];
+  const scope1 = {
+    subagents: {
+      startActivation(spec) {
+        const id = String(spec.label || '').split('#').pop();
+        if (id === 'gate') {
+          gateSpecs.push(spec);
+          if (spec.outputSchema) {
+            return Promise.resolve({
+              childId: 'kid-gate-schema-err',
+              result: Promise.resolve({
+                output: [],
+                stopReason: 'error',
+                error: 'response_format json_schema is not supported by this provider',
+              }),
+              dispose: () => Promise.resolve(),
+            });
+          }
+          return Promise.resolve({
+            childId: 'kid-gate-plain-ok',
+            result: Promise.resolve({
+              output: [{ type: 'text', text: '{"pass": true, "reason": "自检全部通过"}' }],
+              stopReason: 'completed',
+            }),
+            dispose: () => Promise.resolve(),
+          });
+        }
+        return Promise.resolve({
+          childId: 'kid-' + id,
+          result: Promise.resolve({ output: [{ type: 'text', text: 'ok:' + id }], stopReason: 'completed' }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+  const plan = {
+    task: '条件降级重试测试',
+    nodes: [
+      { id: 'run', kind: 'agent', label: '执行', role: '执行' },
+      { id: 'gate', kind: 'condition', label: '是否通过', role: '判断', model: 'DeepSeek-V4-Pro' },
+      { id: 'yes_s', kind: 'agent', label: '发布', role: '发布' },
+      { id: 'final', kind: 'lead', label: '终审', role: '终审' },
+    ],
+    edges: [
+      { from: 'lead', to: 'run', type: 'prompt' },
+      { from: 'run', to: 'gate', type: 'prompt' },
+      { from: 'gate', to: 'yes_s', type: 'prompt', branch: 'true' },
+      { from: 'yes_s', to: 'final', type: 'prompt' },
+    ],
+  };
+  const resOk = await executePlan(scope1, plan, {}, { agent: { id: 's-schema-fallback-' + Date.now() }, signal: new AbortController().signal });
+  assert.equal(resOk.status, 'done');
+  assert.equal(gateSpecs.length, 2, 'retries condition node once without outputSchema');
+  assert.ok(gateSpecs[0].outputSchema, 'first attempt requests outputSchema');
+  assert.equal(gateSpecs[1].outputSchema, undefined, 'downgrade retry omits outputSchema');
+  assert.equal(resOk.failed.length, 0);
+  assert.equal(resOk.results.yes_s, 'ok:yes_s', 'downstream true branch runs cleanly after plain-JSON rescue');
+
+  // When both attempts fail without fallbackModel, surface real error detail and NEVER blame "未配置备用模型"
+  const scope2 = {
+    subagents: {
+      startActivation(spec) {
+        const id = String(spec.label || '').split('#').pop();
+        if (id === 'gate') {
+          return Promise.resolve({
+            childId: 'kid-gate-hard-err',
+            result: Promise.resolve({
+              output: [],
+              stopReason: 'error',
+              error: 'upstream gateway 502 bad gateway',
+            }),
+            dispose: () => Promise.resolve(),
+          });
+        }
+        return Promise.resolve({
+          childId: 'kid-' + id,
+          result: Promise.resolve({ output: [{ type: 'text', text: 'ok:' + id }], stopReason: 'completed' }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+  const resFail = await executePlan(scope2, plan, {}, { agent: { id: 's-schema-hardfail-' + Date.now() }, signal: new AbortController().signal });
+  assert.equal(resFail.status, 'done');
+  assert.equal(resFail.failed.length, 1);
+  assert.equal(resFail.failed[0].reason, 'error', 'keeps canonical machine reason code');
+  assert.ok(resFail.results.gate.includes('502 bad gateway'), 'surfaces real host error detail in result text');
+  assert.ok(resFail.results.gate.includes('DeepSeek-V4-Pro'), 'mentions the actual model that failed');
+  assert.ok(!resFail.results.gate.includes('未配置备用模型'), 'must never mislead Lead into blaming missing fallbackModel');
 });

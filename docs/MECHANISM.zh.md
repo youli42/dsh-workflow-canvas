@@ -119,8 +119,8 @@ sequenceDiagram
 ## 5. 实时状态胶囊与点击直达子会话
 
 1. **节点反查标记**：`spawnOnce` 启动子代理时，固定把 `spec.label` 设为 `<节点名>#<nodeId>`。
-2. **状态与遥测实时追踪**：客户端在对话运行期间每 700ms（以及挂载与每轮结束时）读取 `sessions.list` 投影中的 `subagentCatalog` 与 `subagentTiming`，用末尾正则 `/#([^\s#]+)$/` 精准反查子代理状态（`running` 具最高优先级，避免多轮重试被历史记录覆盖）与 `childId`；同时轮询 Host 写入的 `<workspace>/.dsh/canvas/<sid>.run.json` 获取条件判决（`decisions`）、剪枝集（`pruned`）、阻断边（`blockedEdges`）、回环实时轮次（`loopCounts` / `nodeAttempts`）与待拍板状态（`waitingLead`）。
-3. **Lead「待拍板」权威状态与统一终止**：优先以 `.run.json` 报告的权威状态为准（`need-lead` 高亮 **`⏸ 待拍板`**，`halted` / `done` / `idle` 绝不误回弹锁死），仅在缺失 `.run.json` 时回退到前向边启发式推导；运行中或待拍板时均显示 **`⏹ 终止`** 按钮。
+2. **状态与遥测实时追踪**：客户端在对话运行期间每 700ms（以及挂载与每轮结束时）读取 `sessions.list` 投影中的 `subagentCatalog` 与 `subagentTiming`，用末尾正则 `/#([^\s#]+)$/` 精准反查子代理状态（`running` 具最高优先级，避免多轮重试被历史记录覆盖）与 `childId`；同时轮询 Host 写入的 `<workspace>/.dsh/canvas/<sid>.run.json` 获取条件判决（`decisions`）、剪枝集（`pruned`）、阻断边（`blockedEdges`）、回环实时轮次（`loopCounts` / `nodeAttempts`）、待拍板状态（`waitingLead`）以及零 Token 复盘快照（`summary`：各节点耗时、回退/续接标记与回环历史，绝不注入模型上下文）。
+3. **Lead「待拍板」权威状态、统一终止与执行复盘**：优先以 `.run.json` 报告的权威状态为准（`need-lead` 高亮 **`⏸ 待拍板`**，`halted` / `done` / `idle` 绝不误回弹锁死），仅在缺失 `.run.json` 时回退到前向边启发式推导；左上角 **`⏹ 终止`** 按钮常态可见（空闲灰标、运行或待拍板亮红）；存在运行遥测时，左下角同步出现 **复盘** 胶囊（及 `⋯ → 📊 执行复盘`）展示本地统计与一键导出 Markdown。
 4. **一键直达真实子对话**：点击任意子代理节点左下角状态胶囊（如 `进行中 ↗` / `已完成 ↗`），客户端调用 `sidebarRight.openResource('dsh-resource://subagentchat/session/<childId>?parent=<sessionId>&mode=<mode>', { kind: 'subagentchat', preferNewPane: true })`，直接在新侧边窗格打开该子代理的真实对话记录。
 
 ---

@@ -104,6 +104,7 @@ Press **`● ON`** at the top-left of the canvas, then either click **`▶ Run`*
 - If the entry Lead's task is blank, `▶ Run` stays disabled with a hint and you can still send your chat message directly as `task`.
 - At an intermediate **Lead** node, the canvas shows **`⏸ Ready`** (and Entry Lead shows `⏸ Awaiting Lead`) while handing control to chat; once you reply, downstream nodes resume automatically through the final Lead review.
 - **Unified `⏹ Stop` button**: Always visible beside `● ON` (muted when idle; lights up red alongside a compact `⏹` button on the Entry Lead card whenever a run is active or paused at **`⏸ Awaiting Lead`**) — clicking it immediately cancels the root turn, interrupts all live subagents, clears any Lead pause, and preserves completed-node cache (you can also ask in chat to cancel via `canvas_workflow({ cancel: true })`).
+- **Zero-token Run Summary**: Once a workflow runs, a compact bottom-left summary pill (and `⋯ → 📊 Run summary`) displays live elapsed time, per-node duration bars, fallback/session-continuation tags, condition verdicts, and round-by-round loop retry history, with one-click node focus, child-chat jump (`↗`), and **Copy Markdown** export — computed purely from local `.run.json` telemetry with zero extra LLM calls or prompt tokens.
 - Re-running in the same chat supports `reset: true`; if any node has saved **Memory**, the agent confirms whether to keep memory or clear it (`clearMemory: true`).
 
 ![Auto-run enabled canvas, pause at Lead decision, and finish](docs/images/lead-pause-resume.gif)

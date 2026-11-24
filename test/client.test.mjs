@@ -783,3 +783,103 @@ test('analyzeLoopSelection rejects full-graph overlap & layoutGraph(lr) spaces t
   const sibOut = laid.find((n) => n.id === 'sib');
   assert.ok(sibOut.y >= tallOut.y + client.nodeHeight(tallOut) + 20, 'tall condition card must not overlap sibling below it');
 });
+
+test('formatDurationMs, buildRunSummaryView & formatRunSummaryMarkdown cover v1.6 summary and legacy .run.json', () => {
+  const client = loadClientTestExports();
+  assert.equal(client.formatDurationMs(null), '—');
+  assert.equal(client.formatDurationMs(-5), '—');
+  assert.equal(client.formatDurationMs(420), '420ms');
+  assert.equal(client.formatDurationMs(4250), '4.3s');
+  assert.equal(client.formatDurationMs(84000), '1m 24s');
+  assert.equal(client.formatDurationMs(3720000), '1h 2m');
+
+  assert.equal(client.buildRunSummaryView({ runState: null, nodes: [] }).hasData, false);
+  assert.equal(client.buildRunSummaryView({ runState: { status: 'idle' }, nodes: [] }).hasData, false);
+
+  const canvasNodes = [
+    { id: 'lead', kind: 'lead', label: 'Lead' },
+    { id: 'impl', kind: 'agent', label: '核心实现' },
+    { id: 'gate', kind: 'condition', label: '质量门禁' },
+    { id: 'skip', kind: 'agent', label: '备选分支' },
+    { id: 'final', kind: 'lead', label: '终审' },
+  ];
+
+  // Live running summary computes elapsed & active node live duration
+  const liveView = client.buildRunSummaryView({
+    runState: {
+      status: 'running',
+      summary: {
+        status: 'running',
+        startedAt: 1000,
+        endedAt: null,
+        maxParallel: 4,
+        totalLoops: 1,
+        nodes: [
+          { id: 'impl', label: '核心实现', kind: 'agent', status: 'running', startedAt: 2000, endedAt: null, durationMs: 3000, runs: 2, model: 'DeepSeek-V4-Pro', fallbackUsed: true, sessionContinued: true, childId: 'c1', reason: '' },
+          { id: 'gate', label: '质量门禁', kind: 'condition', status: 'pending', startedAt: null, endedAt: null, durationMs: 500, runs: 1, model: '', fallbackUsed: false, sessionContinued: false, childId: 'c2', reason: '打回修复 — 单测未过' },
+          { id: 'skip', label: '备选分支', kind: 'agent', status: 'pruned', startedAt: null, endedAt: null, durationMs: 0, runs: 0, model: '', fallbackUsed: false, sessionContinued: false, childId: '', reason: '' },
+        ],
+        loops: [
+          { fromLabel: '质量门禁', toLabel: '核心实现', used: 1, max: 3, exhausted: false, rounds: [{ round: 1, reason: '单测未过' }] },
+        ],
+      },
+    },
+    nodes: canvasNodes,
+    runsById: { skip: { childId: 'stale-old-run-kid' } },
+    now: 4500,
+  });
+  assert.equal(liveView.hasData, true);
+  assert.equal(liveView.isLive, true);
+  assert.equal(liveView.elapsedMs, 3500);
+  assert.equal(liveView.nodes[0].durationMs, 5500, 'accumulates previous round 3000ms + live 2500ms');
+  assert.equal(liveView.nodes[2].durationMs, null, 'pruned node shows no duration');
+  assert.equal(liveView.nodes[2].childId, '', 'pruned node must not inherit stale childId from an earlier run');
+  assert.equal(liveView.totalLoops, 1);
+
+  const mdZh = client.formatRunSummaryMarkdown(liveView, 'zh');
+  assert.ok(mdZh.includes('### 执行复盘摘要'));
+  assert.ok(mdZh.includes('| 核心实现 | 子代理 | 运行中 | 5.5s | 2 |'));
+  assert.ok(mdZh.includes('备用回退') && mdZh.includes('续接会话'));
+  assert.ok(mdZh.includes('质量门禁 ↺ 核心实现'));
+
+  const mdEn = client.formatRunSummaryMarkdown(liveView, 'en');
+  assert.ok(mdEn.includes('### Run Summary'));
+  assert.ok(mdEn.includes('| Node | Type | Status | Duration | Runs | Notes |'));
+  assert.ok(mdEn.includes('Fallback') && mdEn.includes('Continued'));
+
+  // Backward compatibility: older .run.json without `summary` field still builds cleanly
+  // and derives elapsedMs from client-side fallbackTiming when available
+  const legacyView = client.buildRunSummaryView({
+    runState: {
+      status: 'done',
+      done: ['impl', 'gate'],
+      pruned: ['skip'],
+      decisions: { gate: { branchLabels: ['通过'], reason: 'ok' } },
+    },
+    nodes: canvasNodes,
+    runsById: { impl: { childId: 'legacy-kid' } },
+    fallbackTiming: { startedAt: 10000, endedAt: 22400 },
+  });
+  assert.equal(legacyView.hasData, true);
+  assert.equal(legacyView.doneCount, 2);
+  assert.equal(legacyView.prunedCount, 1);
+  assert.equal(legacyView.elapsedMs, 12400);
+  assert.equal(legacyView.nodes.find((n) => n.id === 'impl').childId, 'legacy-kid');
+
+  // Regression: opening an old finished legacy .run.json (no `summary`, no observed live start)
+  // must return elapsedMs=null ('—'), NEVER fabricate `now - runState.at` (e.g. 10m 0s).
+  const staleLegacyView = client.buildRunSummaryView({
+    runState: {
+      status: 'done',
+      at: 1000,
+      done: ['impl'],
+      pruned: [],
+      decisions: {},
+    },
+    nodes: canvasNodes,
+    now: 601000,
+    fallbackTiming: { startedAt: null, endedAt: null },
+  });
+  assert.equal(staleLegacyView.elapsedMs, null);
+  assert.equal(client.formatDurationMs(staleLegacyView.elapsedMs), '—');
+});

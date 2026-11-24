@@ -61,6 +61,7 @@ Output sockets determine link type; every non-entry node has a single universal 
 7. A **terminal** Lead node (zero remaining downstream nodes) finishes directly with `status: "done"` and `finalLead`: complete the review/summary and reply directly to the user — no extra `canvas_workflow` callback is needed.
 8. When a `session-ref` link points into that Lead node the result lists `sessions: [{ label, childId }]`; you may message those agents directly to follow up.
 9. Only assign image/visual inspection roles to models that declare image input support.
+10. Live timing, fallback/session badges, and loop retry breakdowns are written purely to local `.run.json` telemetry for the sidebar's zero-token **Run Summary** (`📊 Run summary`) and are never injected into model prompts.
 
 ## Failures & verification iron rule
 

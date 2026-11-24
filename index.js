@@ -457,6 +457,23 @@ function briefFor(plan, node, results, failedMap, prunedSet, loopCtx) {
   return text;
 }
 
+function extractResultError(result) {
+  if (!result || typeof result !== 'object') return '';
+  const candidates = [result.error, result.errorMessage, result.message, result.failureReason];
+  for (const raw of candidates) {
+    if (typeof raw === 'string' && raw.trim()) return raw.trim();
+    if (raw && typeof raw === 'object') {
+      const msg = raw.message || raw.detail || raw.code;
+      if (typeof msg === 'string' && msg.trim()) return msg.trim();
+      try {
+        const s = JSON.stringify(raw);
+        if (s && s !== '{}') return s.slice(0, 240);
+      } catch (_e) { /* ignore */ }
+    }
+  }
+  return '';
+}
+
 function textOf(result) {
   // A structured node's canonical value is its parsed object, not the prose.
   if (result && result.structured !== undefined) {
@@ -468,7 +485,10 @@ function textOf(result) {
   }
   const blocks = (result && result.output) || [];
   const text = blocks.map((b) => (b && typeof b.text === 'string' ? b.text : '')).join('');
-  return text || '[' + ((result && result.stopReason) || 'no-output') + ']';
+  if (text) return text;
+  const errDetail = extractResultError(result);
+  const stop = (result && result.stopReason) || (errDetail ? 'error' : 'no-output');
+  return errDetail ? '[' + stop + '] ' + errDetail : '[' + stop + ']';
 }
 
 function failed(result) {
@@ -517,39 +537,42 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
   if (model) agentOptions.model = model;
   if (node.reasoning) agentOptions.reasoningEffort = node.reasoning;
   if (Object.keys(agentOptions).length) spec.agentOptions = agentOptions;
+  const allowSchema = !(route && route.noSchema);
   if (isCondition) {
     const { branches, isDefaultBinary, multiMatch } = conditionBranches(node);
     spec.agentPreset = 'minimal';
-    spec.outputSchema = isDefaultBinary
-      ? {
-          type: 'object',
-          properties: {
-            pass: { type: 'boolean', description: 'true to follow the Yes/Pass branch, false to follow the No/Fail branch.' },
-            reason: { type: 'string', description: 'Concise one-sentence explanation for this routing decision.' },
-          },
-          required: ['pass', 'reason'],
-          additionalProperties: false,
-        }
-      : {
-          type: 'object',
-          properties: {
-            branches: {
-              type: 'array',
-              items: { type: 'string', enum: branches.map((b) => b.id) },
-              description: multiMatch
-                ? 'All matching branch ids to execute in parallel (empty array if none match).'
-                : 'At most one best-matching branch id (empty array if none match).',
+    if (allowSchema) {
+      spec.outputSchema = isDefaultBinary
+        ? {
+            type: 'object',
+            properties: {
+              pass: { type: 'boolean', description: 'true to follow the Yes/Pass branch, false to follow the No/Fail branch.' },
+              reason: { type: 'string', description: 'Concise one-sentence explanation for this routing decision.' },
             },
-            reason: { type: 'string', description: 'Concise one-sentence explanation for this routing decision.' },
-          },
-          required: ['branches', 'reason'],
-          additionalProperties: false,
-        };
+            required: ['pass', 'reason'],
+            additionalProperties: false,
+          }
+        : {
+            type: 'object',
+            properties: {
+              branches: {
+                type: 'array',
+                items: { type: 'string', enum: branches.map((b) => b.id) },
+                description: multiMatch
+                  ? 'All matching branch ids to execute in parallel (empty array if none match).'
+                  : 'At most one best-matching branch id (empty array if none match).',
+              },
+              reason: { type: 'string', description: 'Concise one-sentence explanation for this routing decision.' },
+            },
+            required: ['branches', 'reason'],
+            additionalProperties: false,
+          };
+    }
   } else {
     if (node.preset) spec.agentPreset = node.preset;
     const wantsStructured = Boolean(node.structured)
       || (plan.edges || []).some((e) => e.from === node.id && e.type === 'structured');
-    if (wantsStructured) {
+    if (wantsStructured && allowSchema) {
       spec.outputSchema = {
         type: 'object',
         additionalProperties: true,
@@ -572,7 +595,7 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
       activation = await scope.subagents.startActivation(withChild);
     } catch (error) {
       const message = String((error && error.message) || error);
-      return { ok: false, text: '启动失败：' + message, reason: 'activation-failed' };
+      return { ok: false, text: '启动失败：' + message, reason: 'activation-failed', errorDetail: message };
     }
     try {
       if (activation && activation.childId) {
@@ -589,13 +612,15 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
         result = await activation.result;
       } catch (error) {
         const message = String((error && error.message) || error);
-        return { ok: false, text: '运行失败：' + message, reason: 'run-failed' };
+        return { ok: false, text: '运行失败：' + message, reason: 'run-failed', errorDetail: message };
       }
       const outText = textOf(result);
+      const errDetail = extractResultError(result);
       const outcome = {
         ok: !failed(result),
         text: outText,
         reason: result && result.stopReason,
+        errorDetail: errDetail,
         empty: isEmptyOutput(result),
         childId: activation && activation.childId ? String(activation.childId) : '',
       };
@@ -619,7 +644,7 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
     if (signal && signal.aborted) return continued;
     if (continued.ok) {
       liveChild.set(childKey(node.id), continued.childId || loopCtx.warmChildId);
-      return continued;
+      return { ...continued, warmReused: true };
     }
     if (continued.reason !== 'activation-failed') {
       return continued;
@@ -670,9 +695,17 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
   return started;
 }
 
+function formatModelLabel(provider, model) {
+  const p = typeof provider === 'string' ? provider.trim() : '';
+  const m = typeof model === 'string' ? model.trim() : '';
+  if (p && m) return p + '/' + m;
+  return m || p || '';
+}
+
 async function spawnNode(scope, plan, node, results, parent, signal, sid, failedMap, prunedSet, loopCtx) {
+  const primaryModel = formatModelLabel(node.provider, node.model);
   if (signal && signal.aborted) {
-    return { ok: false, empty: false, reason: 'aborted', text: '已取消', childId: '' };
+    return { ok: false, empty: false, reason: 'aborted', text: '已取消', childId: '', modelUsed: primaryModel, fallbackUsed: false, sessionContinued: false };
   }
   const continueFrom = forwardEdgesOf(plan.edges || [])
     .filter((e) => e.to === node.id && e.type === 'session-ref' && !(prunedSet && prunedSet.has(e.from)))
@@ -684,34 +717,109 @@ async function spawnNode(scope, plan, node, results, parent, signal, sid, failed
     const continued = await spawnOnce(scope, plan, node, results, parent, signal, undefined, continueFrom, sid, failedMap, prunedSet, loopCtx);
     if (signal && signal.aborted) return continued;
     if (continued.ok) {
-      const out = { ok: true, empty: Boolean(continued.empty), text: continued.text + '\n（已在上游会话中继续）', childId: continued.childId || continueFrom };
+      const out = {
+        ok: true,
+        empty: Boolean(continued.empty),
+        text: continued.text + '\n（已在上游会话中继续）',
+        childId: continued.childId || continueFrom,
+        modelUsed: primaryModel,
+        fallbackUsed: false,
+        sessionContinued: true,
+      };
       if (continued.decision) out.decision = continued.decision;
       return out;
     }
   }
 
-  const first = await spawnOnce(scope, plan, node, results, parent, signal, undefined, undefined, sid, failedMap, prunedSet, loopCtx);
+  let first = await spawnOnce(scope, plan, node, results, parent, signal, undefined, undefined, sid, failedMap, prunedSet, loopCtx);
   if (signal && signal.aborted) return first;
+  // Many models/proxies reject strict `outputSchema` (`json_schema`) with stopReason='error'.
+  // For condition/structured nodes, automatically retry once on the same model without outputSchema
+  // so `parseConditionDecision` can parse plain-text JSON before giving up or falling back.
+  const usedSchema = node.kind === 'condition'
+    || Boolean(node.structured)
+    || (plan.edges || []).some((e) => e.from === node.id && e.type === 'structured');
+  if (!first.ok && usedSchema && first.reason !== 'activation-failed' && first.reason !== 'aborted' && !isPermissionFailure(first)) {
+    const plainRetry = await spawnOnce(scope, plan, node, results, parent, signal, { noSchema: true }, undefined, sid, failedMap, prunedSet, loopCtx);
+    if (signal && signal.aborted) return plainRetry;
+    if (plainRetry.ok) {
+      first = plainRetry;
+    } else if (plainRetry.errorDetail && !first.errorDetail) {
+      first = plainRetry;
+    }
+  }
   if (first.ok) {
-    const out = { ok: true, empty: Boolean(first.empty), text: first.text, childId: first.childId || '' };
+    const out = {
+      ok: true,
+      empty: Boolean(first.empty),
+      text: first.text,
+      childId: first.childId || '',
+      modelUsed: primaryModel,
+      fallbackUsed: false,
+      sessionContinued: Boolean(first.warmReused),
+    };
     if (first.decision) out.decision = first.decision;
     return out;
   }
   if (!node.fallbackModel && !node.fallbackProvider) {
     const reason = first.reason || 'unknown';
-    return { ok: false, empty: false, reason, text: first.text + '\n（失败原因：' + reason + '，未配置备用模型）', childId: first.childId || '' };
+    const detail = first.errorDetail || '';
+    const modelTag = primaryModel ? ('模型 ' + primaryModel) : '默认模型';
+    const suffix = detail ? (reason + ' — ' + detail) : reason;
+    return {
+      ok: false,
+      empty: false,
+      reason,
+      errorDetail: detail,
+      text: first.text + '\n（' + modelTag + ' 执行失败：' + suffix + '）',
+      childId: first.childId || '',
+      modelUsed: primaryModel,
+      fallbackUsed: false,
+      sessionContinued: false,
+    };
   }
-  const retry = await spawnOnce(scope, plan, node, results, parent, signal, {
+  const fallbackLabel = formatModelLabel(node.fallbackProvider || node.provider, node.fallbackModel || node.model);
+  let retry = await spawnOnce(scope, plan, node, results, parent, signal, {
     provider: node.fallbackProvider,
     model: node.fallbackModel,
   }, undefined, sid, failedMap, prunedSet, loopCtx);
+  if (signal && signal.aborted) return retry;
+  if (!retry.ok && usedSchema && retry.reason !== 'activation-failed' && retry.reason !== 'aborted' && !isPermissionFailure(retry)) {
+    const plainFallback = await spawnOnce(scope, plan, node, results, parent, signal, {
+      provider: node.fallbackProvider,
+      model: node.fallbackModel,
+      noSchema: true,
+    }, undefined, sid, failedMap, prunedSet, loopCtx);
+    if (signal && signal.aborted) return plainFallback;
+    if (plainFallback.ok || (plainFallback.errorDetail && !retry.errorDetail)) retry = plainFallback;
+  }
   if (retry.ok) {
-    const out = { ok: true, empty: Boolean(retry.empty), text: retry.text + '\n（已用备用模型重试成功）', childId: retry.childId || '' };
+    const out = {
+      ok: true,
+      empty: Boolean(retry.empty),
+      text: retry.text + '\n（已用备用模型重试成功）',
+      childId: retry.childId || '',
+      modelUsed: fallbackLabel,
+      fallbackUsed: true,
+      sessionContinued: Boolean(retry.warmReused),
+    };
     if (retry.decision) out.decision = retry.decision;
     return out;
   }
   const reason = retry.reason || 'unknown';
-  return { ok: false, empty: false, reason, text: retry.text + '\n（重试仍失败：' + reason + '）', childId: retry.childId || first.childId || '' };
+  const retryDetail = retry.errorDetail || '';
+  const suffix = retryDetail ? (reason + ' — ' + retryDetail) : reason;
+  return {
+    ok: false,
+    empty: false,
+    reason,
+    errorDetail: retryDetail,
+    text: retry.text + '\n（备用模型 ' + (fallbackLabel || '默认') + ' 重试仍失败：' + suffix + '）',
+    childId: retry.childId || first.childId || '',
+    modelUsed: fallbackLabel,
+    fallbackUsed: true,
+    sessionContinued: false,
+  };
 }
 
 /** Ids reachable from the entry Lead via O(V + E) BFS over forward edges; every other node is skipped at run time. */
@@ -1203,9 +1311,132 @@ function publishCanvas(scope, sessionId, canvas) {
 }
 
 /**
+ * Build a zero-token structured run summary snapshot from in-memory executor state.
+ * Published inside `.run.json` for the sidebar UI (never injected into model prompts).
+ */
+function buildRunSummarySnapshot(st, opts) {
+  if (!st || typeof st !== 'object') return null;
+  const o = opts || {};
+  const now = typeof o.now === 'number' ? o.now : Date.now();
+  const status = typeof o.status === 'string' && o.status ? o.status : 'running';
+  const waitingLead = o.waitingLead || st.waitingLead || null;
+  const haltedReason = typeof o.haltedReason === 'string' && o.haltedReason
+    ? o.haltedReason
+    : (st.haltedReason || '');
+  const isTerminal = status === 'done' || status === 'halted';
+  const startedAt = typeof st.startedAt === 'number' ? st.startedAt : now;
+  const endedAt = isTerminal ? (typeof st.endedAt === 'number' ? st.endedAt : now) : null;
+  const nodeStatsMap = st.nodeStats && typeof st.nodeStats === 'object' ? st.nodeStats : {};
+  const prunedSet = st.pruned instanceof Set ? st.pruned : new Set(Array.isArray(st.pruned) ? st.pruned : []);
+  const decisions = st.decisions && typeof st.decisions === 'object' ? st.decisions : {};
+  const failedMap = st.failed && typeof st.failed === 'object' ? st.failed : {};
+  const emptyMap = st.emptyOutputs && typeof st.emptyOutputs === 'object' ? st.emptyOutputs : {};
+  const nodeMeta = st.nodeMeta && typeof st.nodeMeta === 'object' ? st.nodeMeta : {};
+  const orderIds = Array.isArray(st.orderIds) && st.orderIds.length
+    ? st.orderIds
+    : Object.keys(nodeStatsMap);
+
+  const nodes = [];
+  for (const id of orderIds) {
+    const meta = nodeMeta[id] || {};
+    const stat = nodeStatsMap[id] || null;
+    const dec = decisions[id] || null;
+    const fail = failedMap[id] || null;
+    const isPruned = prunedSet.has(id);
+    const isWaiting = Boolean(status === 'need-lead' && waitingLead && waitingLead.id === id);
+
+    let entryStatus = 'pending';
+    let durationMs = stat && typeof stat.durationMs === 'number' ? stat.durationMs : 0;
+    let entryStartedAt = stat && typeof stat.startedAt === 'number' ? stat.startedAt : null;
+    let entryEndedAt = stat && typeof stat.endedAt === 'number' ? stat.endedAt : null;
+
+    if (isPruned && (!stat || stat.status === 'pending' || stat.status === 'pruned')) {
+      entryStatus = 'pruned';
+    } else if (isWaiting) {
+      entryStatus = 'waiting';
+    } else if (stat && stat.status) {
+      entryStatus = stat.status;
+      if (status === 'halted' && (entryStatus === 'running' || entryStatus === 'waiting')) {
+        entryStatus = 'halted';
+        if (entryStartedAt && !entryEndedAt) {
+          durationMs += Math.max(0, now - entryStartedAt);
+          entryEndedAt = now;
+        }
+      }
+    } else if (fail) {
+      entryStatus = 'failed';
+    } else if (emptyMap[id]) {
+      entryStatus = 'empty';
+    }
+
+    let reason = (stat && typeof stat.reason === 'string' ? stat.reason : '') || (fail && fail.reason) || '';
+    if (!reason && dec) {
+      const matched = Array.isArray(dec.branchLabels) && dec.branchLabels.length
+        ? dec.branchLabels.join(', ')
+        : (dec.branchLabel || dec.branch || '');
+      const decReason = typeof dec.reason === 'string' ? dec.reason.trim() : '';
+      reason = matched ? (decReason ? matched + ' — ' + decReason : matched) : decReason;
+    }
+    if (reason.length > 160) reason = reason.slice(0, 159) + '…';
+
+    nodes.push({
+      id,
+      label: (stat && stat.label) || meta.label || (st.labels && st.labels[id]) || id,
+      kind: (stat && stat.kind) || meta.kind || 'agent',
+      status: entryStatus,
+      startedAt: entryStartedAt,
+      endedAt: entryEndedAt,
+      durationMs,
+      runs: stat && typeof stat.runs === 'number' ? stat.runs : 0,
+      model: (stat && stat.model) || meta.model || '',
+      fallbackUsed: Boolean(stat && stat.fallbackUsed),
+      sessionContinued: Boolean(stat && stat.sessionContinued),
+      childId: (stat && stat.childId) || '',
+      reason,
+    });
+  }
+
+  const loopMeta = Array.isArray(st.loopMeta) ? st.loopMeta : [];
+  const loopCounts = st.loopCounts && typeof st.loopCounts === 'object' ? st.loopCounts : {};
+  const loopHistory = st.loopHistory && typeof st.loopHistory === 'object' ? st.loopHistory : {};
+  const exhaustedKeys = new Set(Array.isArray(st.loopExhausted) ? st.loopExhausted.map((x) => x && x.edgeKey).filter(Boolean) : []);
+  const loops = [];
+  for (const lm of loopMeta) {
+    const used = Number(loopCounts[lm.key]) || 0;
+    const rawRounds = Array.isArray(loopHistory[lm.key]) ? loopHistory[lm.key] : [];
+    const exhausted = exhaustedKeys.has(lm.key);
+    if (used === 0 && rawRounds.length === 0 && !exhausted) continue;
+    loops.push({
+      fromLabel: lm.fromLabel,
+      toLabel: lm.toLabel,
+      used,
+      max: lm.max,
+      exhausted,
+      rounds: rawRounds.map((r) => ({
+        round: r.round,
+        reason: typeof r.reason === 'string' && r.reason.length > 140 ? r.reason.slice(0, 139) + '…' : (r.reason || ''),
+      })),
+    });
+  }
+
+  return {
+    status,
+    startedAt,
+    endedAt,
+    haltedReason,
+    maxParallel: typeof st.maxParallel === 'number' ? st.maxParallel : 4,
+    totalLoops: typeof st.totalLoops === 'number' ? st.totalLoops : 0,
+    reused: Array.isArray(st.reusedIds) ? st.reusedIds.slice() : [],
+    nodes,
+    loops,
+  };
+}
+
+/**
  * Publish live run-state telemetry (condition decisions, pruned nodes, blocked edges,
- * waitingLead) to `.dsh/canvas/<sessionId>.run.json` so the sidebar canvas can
- * visualize branch routing and verdict reasons without touching the canvas definition file.
+ * waitingLead, and zero-token run summary) to `.dsh/canvas/<sessionId>.run.json` so
+ * the sidebar canvas can visualize branch routing and execution metrics without touching
+ * the canvas definition file or injecting anything into model prompts.
  */
 function publishRunState(scope, sessionId, runState) {
   try {
@@ -1286,6 +1517,9 @@ function abortSessionRun(scope, sessionId, rootAgent, opts) {
   const st = runBySession.get(sid);
   const wasWaiting = Boolean(st && st.waitingLead);
   if (st) {
+    const haltNow = Date.now();
+    st.endedAt = haltNow;
+    st.haltedReason = wasWaiting ? '用户结束了等待拍板状态' : '用户主动终止';
     if (st.done && st.done.size > 0) {
       lastRunBySession.set(sid, {
         sig: st.sig,
@@ -1298,9 +1532,16 @@ function abortSessionRun(scope, sessionId, rootAgent, opts) {
         pruned: new Set(st.pruned || []),
         decisions: { ...(st.decisions || {}) },
         fallbackLinks: Array.isArray(st.fallbackLinks) ? st.fallbackLinks.map((fl) => ({ ...fl })) : [],
+        nodeStats: st.nodeStats ? Object.fromEntries(Object.entries(st.nodeStats).map(([k, v]) => [k, { ...v }])) : {},
         halted: true,
       });
     }
+    const summary = buildRunSummarySnapshot(st, {
+      status: 'halted',
+      waitingLead: null,
+      haltedReason: st.haltedReason,
+      now: haltNow,
+    });
     runBySession.delete(sid);
     publishRunState(scope, sid, {
       status: 'halted',
@@ -1311,6 +1552,7 @@ function abortSessionRun(scope, sessionId, rootAgent, opts) {
       loopCounts: {},
       nodeAttempts: { ...(st.nodeAttempts || {}) },
       waitingLead: null,
+      summary,
     });
     saveStore();
   } else {
@@ -1325,6 +1567,7 @@ function abortSessionRun(scope, sessionId, rootAgent, opts) {
       loopCounts: {},
       nodeAttempts: {},
       waitingLead: null,
+      summary: null,
     });
   }
   return { stopped: true, wasRunning, wasWaiting };
@@ -1574,16 +1817,40 @@ async function executePlan(scope, plan, args, exec) {
 
   const byId = new Map(runnable.map((n) => [n.id, n]));
   const labelOf = new Map(order.map((n) => [n.id, n.label || n.id]));
+  const orderIds = runnable.map((n) => n.id);
+  const nodeMeta = Object.fromEntries(runnable.map((n) => [n.id, {
+    label: n.label || n.id,
+    kind: n.kind || 'agent',
+    model: formatModelLabel(n.provider, n.model),
+  }]));
+  const loopMeta = (plan.edges || [])
+    .filter((e) => isLoopEdge(e))
+    .map((e) => ({
+      key: edgeKey(e),
+      fromLabel: labelOf.get(e.from) || e.from,
+      toLabel: labelOf.get(e.to) || e.to,
+      max: normalizeMaxIterations(e.maxIterations),
+    }));
+  const rawMaxParallel = opts.maxParallel !== undefined ? opts.maxParallel : plan.maxParallel;
+  const MAX_PARALLEL = Number.isFinite(Number(rawMaxParallel))
+    ? Math.max(1, Math.min(8, Math.floor(Number(rawMaxParallel))))
+    : 4;
   const sig = JSON.stringify(plan);
   let state = runBySession.get(sid);
   const wantRetryFailed = opts.retryFailed === true;
   const rawFromNodes = Array.isArray(opts.fromNodes) ? opts.fromNodes.filter((x) => typeof x === 'string' && x.trim()) : [];
   const wantPartial = wantRetryFailed || rawFromNodes.length > 0;
   let reused = [];
+  let reusedIds = [];
 
   if (wantPartial && sid) {
     const base = state || lastRunBySession.get(sid);
     if (base) {
+      const prevStats = base.nodeStats && typeof base.nodeStats === 'object' ? base.nodeStats : {};
+      const carriedStats = {};
+      for (const [k, v] of Object.entries(prevStats)) {
+        if (byId.has(k) && v && typeof v === 'object') carriedStats[k] = { ...v };
+      }
       state = {
         sig,
         done: new Set(Array.from(base.done || []).filter((id) => byId.has(id))),
@@ -1603,6 +1870,15 @@ async function executePlan(scope, plan, args, exec) {
         loopWarmChild: {},
         loopExhausted: [],
         waitingLead: null,
+        startedAt: Date.now(),
+        endedAt: null,
+        haltedReason: '',
+        maxParallel: MAX_PARALLEL,
+        orderIds,
+        nodeMeta,
+        loopMeta,
+        nodeStats: carriedStats,
+        reusedIds: [],
       };
       // Build forward adjacency to invalidate seed nodes and all their downstream dependents.
       const fwd = new Map();
@@ -1639,12 +1915,35 @@ async function executePlan(scope, plan, args, exec) {
         delete state.failed[id];
         delete state.emptyOutputs[id];
         delete state.decisions[id];
+        delete state.nodeStats[id];
       }
       for (const e of plan.edges || []) {
         if (e && invalid.has(e.from)) state.blockedEdges.delete(edgeKey(e));
       }
       state.fallbackLinks = state.fallbackLinks.filter((fl) => !invalid.has(fl.from) && !invalid.has(fl.to));
-      reused = Array.from(state.done).filter((id) => !state.pruned.has(id)).map((id) => labelOf.get(id) || id);
+      reusedIds = Array.from(state.done).filter((id) => !state.pruned.has(id));
+      state.reusedIds = reusedIds;
+      for (const id of reusedIds) {
+        const meta = nodeMeta[id] || {};
+        state.nodeStats[id] = {
+          ...(state.nodeStats[id] || {
+            id,
+            label: meta.label || id,
+            kind: meta.kind || 'agent',
+            startedAt: null,
+            endedAt: null,
+            durationMs: 0,
+            runs: 1,
+            model: meta.model || '',
+            fallbackUsed: false,
+            sessionContinued: false,
+            childId: '',
+            reason: '',
+          }),
+          status: 'reused',
+        };
+      }
+      reused = reusedIds.map((id) => labelOf.get(id) || id);
       runBySession.set(sid, state);
     }
   }
@@ -1669,6 +1968,15 @@ async function executePlan(scope, plan, args, exec) {
       loopWarmChild: {},
       loopExhausted: [],
       waitingLead: null,
+      startedAt: Date.now(),
+      endedAt: null,
+      haltedReason: '',
+      maxParallel: MAX_PARALLEL,
+      orderIds,
+      nodeMeta,
+      loopMeta,
+      nodeStats: {},
+      reusedIds: [],
     };
     runBySession.set(sid, state);
   }
@@ -1684,8 +1992,14 @@ async function executePlan(scope, plan, args, exec) {
   if (!state.nodeAttempts) state.nodeAttempts = {};
   if (!state.loopWarmChild) state.loopWarmChild = {};
   if (!state.loopExhausted) state.loopExhausted = [];
+  if (typeof state.startedAt !== 'number') state.startedAt = Date.now();
+  if (!state.nodeStats) state.nodeStats = {};
+  state.maxParallel = MAX_PARALLEL;
+  state.orderIds = orderIds;
+  state.nodeMeta = nodeMeta;
+  state.loopMeta = loopMeta;
 
-  const emitRunState = (status, waitingLead) => {
+  const emitRunState = (status, waitingLead, reasonOverride) => {
     if (!sid) return;
     const loopCounts = {};
     for (const e of plan.edges || []) {
@@ -1695,6 +2009,11 @@ async function executePlan(scope, plan, args, exec) {
       loopCounts[k] = entry;
       if (e.id) loopCounts[e.id] = entry;
     }
+    const summary = buildRunSummarySnapshot(state, {
+      status,
+      waitingLead,
+      haltedReason: reasonOverride || state.haltedReason || '',
+    });
     publishRunState(scope, sid, {
       status,
       done: Array.from(state.done || []),
@@ -1704,6 +2023,7 @@ async function executePlan(scope, plan, args, exec) {
       loopCounts,
       nodeAttempts: { ...state.nodeAttempts },
       waitingLead: waitingLead ? { id: waitingLead.id, label: waitingLead.label } : null,
+      summary,
     });
   };
   emitRunState('running', null);
@@ -1721,6 +2041,7 @@ async function executePlan(scope, plan, args, exec) {
       pruned: new Set(state.pruned),
       decisions: { ...state.decisions },
       fallbackLinks: state.fallbackLinks.map((fl) => ({ ...fl })),
+      nodeStats: Object.fromEntries(Object.entries(state.nodeStats || {}).map(([k, v]) => [k, { ...v }])),
       halted: Boolean(haltedFlag),
     });
   };
@@ -1864,10 +2185,6 @@ async function executePlan(scope, plan, args, exec) {
   };
 
   let leadResult = typeof opts.leadResult === 'string' ? opts.leadResult : undefined;
-  const rawMaxParallel = opts.maxParallel !== undefined ? opts.maxParallel : plan.maxParallel;
-  const MAX_PARALLEL = Number.isFinite(Number(rawMaxParallel))
-    ? Math.max(1, Math.min(8, Math.floor(Number(rawMaxParallel))))
-    : 4;
   // Event-driven concurrency pool: as soon as any node finishes, newly unblocked
   // downstream agents start immediately instead of waiting for slower siblings.
   const inFlight = new Map();
@@ -1904,8 +2221,10 @@ async function executePlan(scope, plan, args, exec) {
     runSignal.addEventListener('abort', () => resolve({ __aborted: true }), { once: true });
   });
   const finishAborted = () => {
+    state.endedAt = Date.now();
+    state.haltedReason = '工作流执行已取消';
     snapshotLastRun(true);
-    emitRunState('halted', null);
+    emitRunState('halted', null, state.haltedReason);
     if (sid) runBySession.delete(sid);
     saveStore();
     return {
@@ -1932,19 +2251,39 @@ async function executePlan(scope, plan, args, exec) {
       && !state.done.has(n.id)
       && !inFlight.has(n.id)
       && depsOf(n).every((id) => state.done.has(id)));
+    let launched = 0;
     for (const node of candidates) {
       if (isAborted() || haltedReason || inFlight.size >= MAX_PARALLEL) break;
       const fb = state.loopFeedback[node.id] || null;
       const warmChildId = (fb && state.loopWarmChild[node.id]) ? state.loopWarmChild[node.id] : '';
       const loopCtx = fb ? { feedback: fb, warmChildId } : undefined;
       if (fb) delete state.loopFeedback[node.id];
+      const launchAt = Date.now();
+      const prevStat = state.nodeStats[node.id];
+      state.nodeStats[node.id] = {
+        id: node.id,
+        label: node.label || node.id,
+        kind: node.kind || 'agent',
+        status: 'running',
+        startedAt: launchAt,
+        endedAt: null,
+        durationMs: prevStat && typeof prevStat.durationMs === 'number' ? prevStat.durationMs : 0,
+        runs: (prevStat && typeof prevStat.runs === 'number' ? prevStat.runs : 0) + 1,
+        model: formatModelLabel(node.provider, node.model) || (prevStat && prevStat.model) || '',
+        fallbackUsed: Boolean(prevStat && prevStat.fallbackUsed),
+        sessionContinued: Boolean(prevStat && prevStat.sessionContinued),
+        childId: (prevStat && prevStat.childId) || '',
+        reason: '',
+      };
       const promise = spawnNode(scope, plan, node, state.results, agent, runSignal, sid, state.failed, state.pruned, loopCtx)
         .then(
-          (outcome) => ({ node, outcome }),
-          (err) => ({ node, outcome: { ok: false, reason: 'run-failed', text: '运行失败：' + String((err && err.message) || err) } }),
+          (outcome) => ({ node, outcome, startedAt: launchAt }),
+          (err) => ({ node, startedAt: launchAt, outcome: { ok: false, reason: 'run-failed', text: '运行失败：' + String((err && err.message) || err) } }),
         );
       inFlight.set(node.id, promise);
+      launched += 1;
     }
+    if (launched > 0) emitRunState('running', null);
   };
 
   try {
@@ -1956,8 +2295,10 @@ async function executePlan(scope, plan, args, exec) {
     // but let already in-flight siblings settle so no orphan promises or partial
     // results are dropped before returning the halted report.
     if (haltedReason && inFlight.size === 0) {
+      state.endedAt = Date.now();
+      state.haltedReason = haltedReason;
       snapshotLastRun(true);
-      emitRunState('halted', null);
+      emitRunState('halted', null, haltedReason);
       if (sid) runBySession.delete(sid);
       saveStore();
       return {
@@ -1976,6 +2317,7 @@ async function executePlan(scope, plan, args, exec) {
     }
     const remaining = runnable.filter((n) => !state.done.has(n.id));
     if (!remaining.length) {
+      state.endedAt = Date.now();
       snapshotLastRun(false);
       emitRunState('done', null);
       runBySession.delete(sid);
@@ -2001,8 +2343,32 @@ async function executePlan(scope, plan, args, exec) {
       if ((raceHit && raceHit.__aborted) || isAborted()) {
         return finishAborted();
       }
-      const { node, outcome } = raceHit;
+      const { node, outcome, startedAt } = raceHit;
       inFlight.delete(node.id);
+      const doneAt = Date.now();
+      const attemptElapsed = typeof startedAt === 'number' ? Math.max(0, doneAt - startedAt) : 0;
+      const prevStat = state.nodeStats[node.id] || {
+        id: node.id,
+        label: node.label || node.id,
+        kind: node.kind || 'agent',
+        durationMs: 0,
+        runs: 1,
+      };
+      state.nodeStats[node.id] = {
+        ...prevStat,
+        label: node.label || node.id,
+        kind: node.kind || 'agent',
+        status: !outcome.ok ? 'failed' : (outcome.empty ? 'empty' : 'done'),
+        endedAt: doneAt,
+        durationMs: (prevStat.durationMs || 0) + attemptElapsed,
+        model: outcome.modelUsed || prevStat.model || formatModelLabel(node.provider, node.model),
+        fallbackUsed: Boolean(prevStat.fallbackUsed || outcome.fallbackUsed),
+        sessionContinued: Boolean(prevStat.sessionContinued || outcome.sessionContinued),
+        childId: outcome.childId || prevStat.childId || '',
+        reason: !outcome.ok
+          ? ((outcome.reason || 'unknown') + (outcome.errorDetail ? ' — ' + outcome.errorDetail : ''))
+          : '',
+      };
       state.labels[node.id] = node.label;
       if (node.kind === 'condition') {
         const { branches, isDefaultBinary } = conditionBranches(node);
@@ -2116,6 +2482,10 @@ async function executePlan(scope, plan, args, exec) {
               delete state.emptyOutputs[mid];
               delete state.decisions[mid];
               state.nodeAttempts[mid] = { retry: nextRetry, max: maxIter };
+              // Preserve cumulative durationMs and runs across loop rounds while marking pending for the next launch.
+              if (state.nodeStats[mid]) {
+                state.nodeStats[mid] = { ...state.nodeStats[mid], status: 'pending', startedAt: null, endedAt: null };
+              }
             }
             for (const e of plan.edges || []) {
               if (e && members.has(e.from)) state.blockedEdges.delete(edgeKey(e));
@@ -2236,6 +2606,7 @@ async function executePlan(scope, plan, args, exec) {
         haltedReason = '连续 ' + activationFailCount + ' 个子代理启动失败，已熔断停止后续节点以防继续消耗额度。请检查模型配置或主对话权限后重试。';
       }
       state.done.add(node.id);
+      emitRunState('running', null);
       continue;
     }
 
@@ -2282,6 +2653,24 @@ async function executePlan(scope, plan, args, exec) {
     if (!hasDownstreamWork && leadResult === undefined) {
       // Terminal Lead: zero downstream nodes remain, so complete the run directly
       // and hand off final review/delivery to the Lead without a redundant extra turn.
+      const termNow = Date.now();
+      const prevLeadStat = state.nodeStats[leadNode.id];
+      state.nodeStats[leadNode.id] = {
+        id: leadNode.id,
+        label: leadNode.label || leadNode.id,
+        kind: 'lead',
+        status: 'done',
+        startedAt: (prevLeadStat && prevLeadStat.startedAt) || termNow,
+        endedAt: termNow,
+        durationMs: prevLeadStat && typeof prevLeadStat.durationMs === 'number' ? prevLeadStat.durationMs : 0,
+        runs: (prevLeadStat && typeof prevLeadStat.runs === 'number' ? prevLeadStat.runs : 0) + 1,
+        model: '',
+        fallbackUsed: false,
+        sessionContinued: false,
+        childId: '',
+        reason: '',
+      };
+      state.endedAt = termNow;
       state.done.add(leadNode.id);
       snapshotLastRun(false);
       emitRunState('done', null);
@@ -2310,6 +2699,23 @@ async function executePlan(scope, plan, args, exec) {
       };
     }
     if (leadResult === undefined) {
+      const pauseNow = Date.now();
+      const prevLeadStat = state.nodeStats[leadNode.id];
+      state.nodeStats[leadNode.id] = {
+        id: leadNode.id,
+        label: leadNode.label || leadNode.id,
+        kind: 'lead',
+        status: 'waiting',
+        startedAt: pauseNow,
+        endedAt: null,
+        durationMs: prevLeadStat && typeof prevLeadStat.durationMs === 'number' ? prevLeadStat.durationMs : 0,
+        runs: (prevLeadStat && typeof prevLeadStat.runs === 'number' ? prevLeadStat.runs : 0) + 1,
+        model: '',
+        fallbackUsed: false,
+        sessionContinued: false,
+        childId: '',
+        reason: '',
+      };
       const leadFbSummary = leadFb
         ? { retry: leadFb.retry, max: leadFb.max, sourceLabel: leadFb.sourceLabel, reason: leadFb.reason }
         : null;
@@ -2341,12 +2747,33 @@ async function executePlan(scope, plan, args, exec) {
           + '这一步由你（Lead 本体）完成。完成后再次调用本工具，把结果放进 leadResult 继续；若需取消本次流程可传 cancel: true，若需从头重跑可传 reset: true。',
       };
     }
+    const resumeNow = Date.now();
+    const prevLeadStat = state.nodeStats[leadNode.id];
+    const leadWaitMs = prevLeadStat && typeof prevLeadStat.startedAt === 'number'
+      ? Math.max(0, resumeNow - prevLeadStat.startedAt)
+      : 0;
+    state.nodeStats[leadNode.id] = {
+      id: leadNode.id,
+      label: leadNode.label || leadNode.id,
+      kind: 'lead',
+      status: 'done',
+      startedAt: (prevLeadStat && prevLeadStat.startedAt) || resumeNow,
+      endedAt: resumeNow,
+      durationMs: (prevLeadStat && typeof prevLeadStat.durationMs === 'number' ? prevLeadStat.durationMs : 0) + leadWaitMs,
+      runs: prevLeadStat && typeof prevLeadStat.runs === 'number' ? prevLeadStat.runs : 1,
+      model: '',
+      fallbackUsed: false,
+      sessionContinued: false,
+      childId: '',
+      reason: '',
+    };
     state.waitingLead = null;
     delete state.loopFeedback[leadNode.id];
     state.results[leadNode.id] = leadResult;
     state.labels[leadNode.id] = leadNode.label;
     state.done.add(leadNode.id);
     leadResult = undefined;
+    emitRunState('running', null);
   }
   } finally {
     if (parentSignal && typeof parentSignal.removeEventListener === 'function') {
@@ -2942,6 +3369,7 @@ export {
   sessionIdFromContext,
   buildActiveCanvasContext,
   isPermissionFailure,
+  buildRunSummarySnapshot,
   abortSessionRun,
   runPlan,
   executePlan,
