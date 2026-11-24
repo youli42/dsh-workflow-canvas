@@ -51,6 +51,9 @@ window.__ModuleLoader__.load({
     const ROW_H = 18;
     const COND_ROW_H = 20;
     const BRANCH_COLORS = ['#3fb950', '#e5534b', '#2f81f7', '#d29922', '#a371f7', '#39c5cf', '#f778ba', '#f0883e'];
+    const LOOP_COLORS = ['#f0883e', '#39c5cf', '#f778ba', '#a371f7', '#d29922'];
+    const MAX_LOOP_ITERATIONS = 10;
+    const DEFAULT_LOOP_ITERATIONS = 3;
     const CONTENT_W = 2400;
     const CONTENT_H = 1600;
     /** World origin offset: keeps negative node coordinates inside the scroll area. */
@@ -187,7 +190,7 @@ window.__ModuleLoader__.load({
         helpBody: [
           '1. 在入口 Lead 里写「本次任务」，这是整张图的总目标。',
           '2. 点「+ 子代理 / + Lead / + 条件」加节点，从右侧输出口拖到另一个节点左侧输入口即可连线。',
-          '3. 输出口决定连线类型：prompt（灰，纯文本）、structured（蓝，JSON）、session（紫，复用上游会话）；条件节点支持多路分支（单选 switch/case 或多选并行，全不满足时跳过中间分支直达最近 Lead）。',
+          '3. 输出口决定连线类型：prompt（灰，纯文本）、structured（蓝，JSON）、session（紫，复用上游会话）；条件节点支持多路分支，并可将分支连回上游（或多选节点右键「↺ 设为回环」）实现带反馈的受控重试（点 ↺ 徽章可调 1–10 次，超限自动交 Lead 熔断）。',
           '4. 节点左侧为统一通用输入口，可直接接收任意颜色的连线；拖已连接的左口可断开最近一条连线。',
           '5. 每个节点可设模型、推理强度、能力范围、备用模型、是否记忆；复杂任务/分工/条件可点 ⤢ 展开大框编辑。',
           '6. 连好后点「● 已启用」，然后对对话说「跑一次」，由我调用执行。',
@@ -256,6 +259,19 @@ window.__ModuleLoader__.load({
         ctxInsertAgent: '在此插入子代理',
         ctxInsertCond: '在此插入条件节点',
         ctxLangToggle: '界面语言',
+        ctxMakeLoop: '↺ 设为回环',
+        ctxMakeLoopAuto: '↺ 设为回环（自动补条件）',
+        ctxEditLoop: '↺ 修改回环次数',
+        ctxRemoveLoop: '取消回环',
+        loopCreated: '已创建回环（默认最多重试 3 次，点 ↺ 徽章可调）',
+        loopCreatedAutoCond: '已自动补条件节点并创建回环（点 ↺ 徽章可调次数）',
+        loopOverlap: '不支持交叉或重叠的回环',
+        loopModalTitle: '最大重试次数 (1–10)',
+        loopTipPill: '点击调整最大回环重试次数（1–10）或取消回环',
+        loopAutoCondLabel: '是否通过？',
+        loopAutoCondRole: '判断上游步骤是否执行成功并达到预期；全部达标走「是」，未达标或报错走「否」回环重做。',
+        loopRetryBranch: '重做',
+        loopPrunedNotice: '（内部连线断开，已清理失效回环）',
         shortcutsMenu: '⌨ 快捷键设置',
         shortcutsTitle: '快捷键设置',
         shortcutsHint: '点击右侧按键框后按下新组合键；按 Esc 取消录制，点 × 清除绑定。',
@@ -373,7 +389,7 @@ window.__ModuleLoader__.load({
         helpBody: [
           '1. Write the overall task in the entry Lead node.',
           '2. Add nodes with + Subagent / + Lead / + Condition, then drag from a right socket to a left socket.',
-          '3. Output sockets choose channel type: prompt (grey text), structured (blue JSON), session (purple warm session), or multi-way condition branches (single switch/case or parallel multi-match; jumps to nearest Lead if none match).',
+          '3. Output sockets choose channel type: prompt (grey text), structured (blue JSON), session (purple warm session), or multi-way condition branches; wire a condition branch back upstream (or right-click selected nodes → ↺ Create loop) for bounded feedback retries (click the ↺ pill for 1–10 retries).',
           '4. Every node has one universal left input that accepts any incoming wire; drag a connected input away to detach the latest wire.',
           '5. Each node sets model, reasoning, capability scope, fallback model and memory; click ⤢ to expand a larger editor for long text.',
           '6. Press ● ON, then ask in chat to run the canvas.',
@@ -442,6 +458,19 @@ window.__ModuleLoader__.load({
         ctxInsertAgent: 'Insert Subagent here',
         ctxInsertCond: 'Insert Condition here',
         ctxLangToggle: 'Language',
+        ctxMakeLoop: '↺ Create loop',
+        ctxMakeLoopAuto: '↺ Create loop (+ Condition)',
+        ctxEditLoop: '↺ Edit loop retries',
+        ctxRemoveLoop: 'Remove loop',
+        loopCreated: 'Loop created (max 3 retries; click ↺ pill to edit)',
+        loopCreatedAutoCond: 'Added condition gate & created loop (click ↺ pill to edit)',
+        loopOverlap: 'Overlapping or crossing loops are not supported',
+        loopModalTitle: 'Max retries (1–10)',
+        loopTipPill: 'Click to adjust max loop retries (1–10) or remove loop',
+        loopAutoCondLabel: 'Checks Passed?',
+        loopAutoCondRole: 'Return pass=true if upstream succeeded and meets expectations; return pass=false to retry.',
+        loopRetryBranch: 'Retry',
+        loopPrunedNotice: ' (removed broken loop)',
         shortcutsMenu: '⌨ Shortcuts',
         shortcutsTitle: 'Keyboard Shortcuts',
         shortcutsHint: 'Click a key button then press a new combo. Press Esc to cancel, or × to clear.',
@@ -578,6 +607,39 @@ window.__ModuleLoader__.load({
       },
       ctxDivider: {
         height: '1px', background: C.border, opacity: 0.65, margin: '3px 4px',
+      },
+      loopPill: {
+        position: 'absolute', transform: 'translate(-50%, -50%)', zIndex: 18,
+        padding: '2px 7px', borderRadius: '999px',
+        background: C.elevated, color: C.text,
+        fontSize: '10px', fontWeight: 600, lineHeight: '14px',
+        cursor: 'pointer', whiteSpace: 'nowrap',
+        boxShadow: '0 2px 8px rgba(0,0,0,0.28)',
+        display: 'inline-flex', alignItems: 'center', gap: '3px',
+      },
+      loopPopover: {
+        position: 'absolute', left: '50%', top: 'calc(100% + 6px)', transform: 'translateX(-50%)',
+        zIndex: 60, minWidth: '154px', padding: '8px', borderRadius: '7px',
+        background: C.elevated, color: C.text, border: '1px solid ' + C.border,
+        boxShadow: '0 10px 26px rgba(0,0,0,0.34)',
+      },
+      loopStepBtn: {
+        width: '24px', height: '24px', padding: 0, borderRadius: '5px',
+        border: '1px solid ' + C.border, background: C.base, color: C.text,
+        fontSize: '13px', lineHeight: '22px', cursor: 'pointer', textAlign: 'center',
+      },
+      loopNumInput: {
+        width: '44px', height: '24px', boxSizing: 'border-box', textAlign: 'center',
+        borderRadius: '5px', border: '1px solid ' + C.border,
+        background: C.base, color: C.text, fontSize: '12px', fontWeight: 600,
+        outline: 'none', userSelect: 'text',
+      },
+      loopNodeTag: {
+        position: 'absolute', left: '10px', top: '-11px', zIndex: 9,
+        padding: '0 5px', height: '15px', lineHeight: '15px', borderRadius: '999px',
+        background: C.elevated, fontSize: '9px', fontWeight: 700,
+        pointerEvents: 'none', whiteSpace: 'nowrap',
+        boxShadow: '0 1px 4px rgba(0,0,0,0.26)',
       },
       canvasWrap: {
         position: 'relative', flex: '1 1 auto', minHeight: '0',
@@ -1227,6 +1289,257 @@ window.__ModuleLoader__.load({
       return doc;
     }
 
+    function normalizeMaxIterationsUI(val) {
+      const n = Number(val);
+      if (!Number.isFinite(n)) return DEFAULT_LOOP_ITERATIONS;
+      return Math.max(1, Math.min(MAX_LOOP_ITERATIONS, Math.floor(n)));
+    }
+
+    function forwardEdgesUI(edges) {
+      return (Array.isArray(edges) ? edges : []).filter((e) => e && !e.loop);
+    }
+
+    /** Nodes strictly inside a loop edge (`descendants(to) ∩ ancestors(from)` over forward edges). */
+    function loopMemberIdsUI(nodes, edges, loopEdge) {
+      if (!loopEdge || !loopEdge.from || !loopEdge.to || loopEdge.to === 'lead') return new Set();
+      const fwd = new Map();
+      const rev = new Map();
+      for (const e of forwardEdgesUI(edges)) {
+        if (!e.from || !e.to) continue;
+        if (!fwd.has(e.from)) fwd.set(e.from, []);
+        fwd.get(e.from).push(e.to);
+        if (!rev.has(e.to)) rev.set(e.to, []);
+        rev.get(e.to).push(e.from);
+      }
+      const desc = new Set([loopEdge.to]);
+      const q1 = [loopEdge.to];
+      for (let i = 0; i < q1.length; i += 1) {
+        for (const next of fwd.get(q1[i]) || []) {
+          if (!desc.has(next)) { desc.add(next); q1.push(next); }
+        }
+      }
+      if (!desc.has(loopEdge.from)) return new Set();
+      const anc = new Set([loopEdge.from]);
+      const q2 = [loopEdge.from];
+      for (let i = 0; i < q2.length; i += 1) {
+        for (const prev of rev.get(q2[i]) || []) {
+          if (!anc.has(prev)) { anc.add(prev); q2.push(prev); }
+        }
+      }
+      const members = new Set();
+      for (const id of desc) {
+        if (anc.has(id)) members.add(id);
+      }
+      return members;
+    }
+
+    /** Compute loop visual groups (per-node color & per-edge metadata) from active loop edges. */
+    function loopGroupsForUI(nodes, edges) {
+      const byNode = new Map();
+      const byEdge = new Map();
+      let idx = 0;
+      for (const e of edges || []) {
+        if (!e || e.loop !== true) continue;
+        const members = loopMemberIdsUI(nodes, edges, e);
+        const color = LOOP_COLORS[idx % LOOP_COLORS.length];
+        const info = {
+          edge: e,
+          color,
+          index: idx + 1,
+          members,
+          maxIterations: normalizeMaxIterationsUI(e.maxIterations),
+        };
+        byEdge.set(e.id || (e.from + '->' + e.to), info);
+        for (const nid of members) {
+          if (!byNode.has(nid)) byNode.set(nid, info);
+        }
+        idx += 1;
+      }
+      return { byNode, byEdge };
+    }
+
+    /** Remove any loop edge whose forward ancestor path was broken by an edge or node deletion. */
+    function pruneInvalidLoopEdges(nodes, edges) {
+      const list = Array.isArray(nodes) ? nodes : [];
+      const all = Array.isArray(edges) ? edges : [];
+      let removedCount = 0;
+      const kept = all.filter((e) => {
+        if (!e || e.loop !== true) return true;
+        const ok = loopMemberIdsUI(list, all, e).size > 0;
+        if (!ok) removedCount += 1;
+        return ok;
+      });
+      return { edges: kept, removedCount };
+    }
+
+    /** Check whether dragging from `fromId` to `toId` is a valid controlled loop back-edge. */
+    function canLinkAsLoop(nodes, edges, fromId, toId) {
+      const list = Array.isArray(nodes) ? nodes : [];
+      const fromNode = list.find((n) => n && n.id === fromId);
+      if (!fromNode || fromNode.kind !== 'condition') return { ok: false, reason: 'loopNotCondition' };
+      if (!toId || toId === 'lead' || toId === fromId) return { ok: false, reason: 'loopToLead' };
+      const members = loopMemberIdsUI(list, edges, { from: fromId, to: toId, loop: true });
+      if (!members.size) return { ok: false, reason: 'loopNotAncestor' };
+      const existing = loopGroupsForUI(list, edges);
+      for (const mid of members) {
+        if (existing.byNode.has(mid)) return { ok: false, reason: 'loopOverlap' };
+      }
+      return { ok: true, members };
+    }
+
+    /**
+     * Validate a multi-selected (or single non-condition) subgraph for one-click "Create loop".
+     * Requires a single-entry, single-exit connected subgraph with no overlap with existing loops.
+     */
+    function analyzeLoopSelection(nodes, edges, selectedIds) {
+      const list = Array.isArray(nodes) ? nodes : [];
+      const byId = new Map(list.map((n) => [n.id, n]));
+      const selIds = Array.from(new Set((selectedIds || []).filter((id) => id && id !== 'lead' && byId.has(id))));
+      if (!selIds.length) return { ok: false, reason: 'loopNeedNodes' };
+      const selSet = new Set(selIds);
+      const existing = loopGroupsForUI(list, edges);
+      for (const id of selIds) {
+        if (existing.byNode.has(id)) return { ok: false, reason: 'loopOverlap' };
+      }
+      if (selIds.length === 1) {
+        const only = byId.get(selIds[0]);
+        if (only.kind === 'condition') return { ok: false, reason: 'loopCondAlone' };
+        return { ok: true, entryId: only.id, exitId: only.id, needsAutoCondition: true };
+      }
+      const fwd = new Map(selIds.map((id) => [id, []]));
+      const rev = new Map(selIds.map((id) => [id, []]));
+      const undir = new Map(selIds.map((id) => [id, []]));
+      for (const e of forwardEdgesUI(edges)) {
+        if (!selSet.has(e.from) || !selSet.has(e.to)) continue;
+        fwd.get(e.from).push(e.to);
+        rev.get(e.to).push(e.from);
+        undir.get(e.from).push(e.to);
+        undir.get(e.to).push(e.from);
+      }
+      // Must be weakly connected
+      const visited = new Set([selIds[0]]);
+      const q = [selIds[0]];
+      for (let i = 0; i < q.length; i += 1) {
+        for (const nb of undir.get(q[i]) || []) {
+          if (!visited.has(nb)) { visited.add(nb); q.push(nb); }
+        }
+      }
+      if (visited.size !== selIds.length) return { ok: false, reason: 'loopDisconnected' };
+      const entries = selIds.filter((id) => (rev.get(id) || []).length === 0);
+      const exits = selIds.filter((id) => (fwd.get(id) || []).length === 0);
+      if (entries.length !== 1 || exits.length !== 1) return { ok: false, reason: 'loopMultiEnds' };
+      const entryId = entries[0];
+      const exitId = exits[0];
+      // Verify entry reaches exit
+      const reach = new Set([entryId]);
+      const rq = [entryId];
+      for (let i = 0; i < rq.length; i += 1) {
+        for (const nx of fwd.get(rq[i]) || []) {
+          if (!reach.has(nx)) { reach.add(nx); rq.push(nx); }
+        }
+      }
+      if (!reach.has(exitId)) return { ok: false, reason: 'loopDisconnected' };
+      const exitNode = byId.get(exitId);
+      return {
+        ok: true,
+        entryId,
+        exitId,
+        needsAutoCondition: exitNode.kind !== 'condition',
+      };
+    }
+
+    /**
+     * Build a clean rounded bypass-rail SVG path for a controlled loop back-edge so it
+     * routes outside all loop member cards instead of cutting across card bodies.
+     */
+    function loopEdgeArc(from, to, edge, direction, nodes, edges) {
+      const type = (edge && edge.type) || 'prompt';
+      const branch = (edge && edge.branch) || '';
+      const p1 = outputSocketPos(from, type, branch, direction);
+      const p2 = inputSocketPos(to, direction);
+      const x1 = p1.x + WORLD_PAD;
+      const y1 = p1.y + WORLD_PAD;
+      const x2 = p2.x + WORLD_PAD;
+      const y2 = p2.y + WORLD_PAD;
+
+      const list = Array.isArray(nodes) ? nodes : [from, to];
+      const byId = new Map(list.map((n) => [n.id, n]));
+      const memberIds = loopMemberIdsUI(list, edges || [], edge);
+      const boxNodes = memberIds.size
+        ? Array.from(memberIds).map((id) => byId.get(id)).filter(Boolean)
+        : [from, to];
+      let minX = Infinity;
+      let maxX = -Infinity;
+      let minY = Infinity;
+      for (const n of boxNodes) {
+        minX = Math.min(minX, n.x + WORLD_PAD);
+        maxX = Math.max(maxX, n.x + WORLD_PAD + NODE_W);
+        minY = Math.min(minY, n.y + WORLD_PAD);
+      }
+
+      const buildRoundedPath = (pts, radius) => {
+        if (pts.length < 2) return '';
+        let d = 'M ' + pts[0].x + ' ' + pts[0].y;
+        for (let i = 1; i < pts.length - 1; i += 1) {
+          const prev = pts[i - 1];
+          const cur = pts[i];
+          const next = pts[i + 1];
+          const d1 = Math.hypot(cur.x - prev.x, cur.y - prev.y);
+          const d2 = Math.hypot(next.x - cur.x, next.y - cur.y);
+          const r = Math.min(radius, d1 * 0.45, d2 * 0.45);
+          if (r < 1) {
+            d += ' L ' + cur.x + ' ' + cur.y;
+          } else {
+            const ax = cur.x - ((cur.x - prev.x) / d1) * r;
+            const ay = cur.y - ((cur.y - prev.y) / d1) * r;
+            const bx = cur.x + ((next.x - cur.x) / d2) * r;
+            const by = cur.y + ((next.y - cur.y) / d2) * r;
+            d += ' L ' + ax.toFixed(1) + ' ' + ay.toFixed(1)
+              + ' Q ' + cur.x.toFixed(1) + ' ' + cur.y.toFixed(1) + ' ' + bx.toFixed(1) + ' ' + by.toFixed(1);
+          }
+        }
+        const last = pts[pts.length - 1];
+        d += ' L ' + last.x + ' ' + last.y;
+        return d;
+      };
+
+      if (direction === 'tb') {
+        const onLeft = Boolean(from && from.tbSide === 'left');
+        const railX = onLeft ? (Math.min(x1, minX) - 42) : (Math.max(x1, maxX) + 42);
+        const topY = Math.min(y2, minY) - 34;
+        const points = [
+          { x: x1, y: y1 },
+          { x: railX, y: y1 },
+          { x: railX, y: topY },
+          { x: x2, y: topY },
+          { x: x2, y: y2 },
+        ];
+        return {
+          path: buildRoundedPath(points, 16),
+          points,
+          midX: railX,
+          midY: Math.round((y1 + topY) / 2),
+        };
+      }
+      const rightX = Math.max(x1, maxX) + 34;
+      const leftX = Math.min(x2, minX) - 34;
+      const topY = Math.min(y1, y2, minY) - 38;
+      const points = [
+        { x: x1, y: y1 },
+        { x: rightX, y: y1 },
+        { x: rightX, y: topY },
+        { x: leftX, y: topY },
+        { x: leftX, y: y2 },
+        { x: x2, y: y2 },
+      ];
+      return {
+        path: buildRoundedPath(points, 16),
+        points,
+        midX: Math.round((rightX + leftX) / 2),
+        midY: topY,
+      };
+    }
+
     /** Control points of one link, in canvas coordinates. Supports horizontal (lr) and vertical (tb) flow. */
     function edgeCurve(from, to, typeOrEdge, direction) {
       const type = (typeOrEdge && typeof typeOrEdge === 'object') ? (typeOrEdge.type || 'prompt') : (typeOrEdge || 'prompt');
@@ -1265,13 +1578,24 @@ window.__ModuleLoader__.load({
       return { x1, y1, c1x: x1 + dx, c1y: y1, c2x: x2 - dx, c2y: y2, x2, y2 };
     }
 
-    function edgePath(from, to, typeOrEdge, direction) {
+    function edgePath(from, to, typeOrEdge, direction, nodes, edges) {
+      if (typeOrEdge && typeof typeOrEdge === 'object' && typeOrEdge.loop) {
+        return loopEdgeArc(from, to, typeOrEdge, direction, nodes, edges).path;
+      }
       const c = edgeCurve(from, to, typeOrEdge, direction);
       return 'M ' + c.x1 + ' ' + c.y1 + ' C ' + c.c1x + ' ' + c.c1y + ', ' + c.c2x + ' ' + c.c2y + ', ' + c.x2 + ' ' + c.y2;
     }
 
-    /** Shortest distance between a point and one link, sampled along the curve. */
-    function distanceToEdge(point, from, to, typeOrEdge, direction) {
+    /** Shortest distance between a point and one link, sampled along the curve (or bypass rail for loops). */
+    function distanceToEdge(point, from, to, typeOrEdge, direction, nodes, edges) {
+      if (typeOrEdge && typeof typeOrEdge === 'object' && typeOrEdge.loop) {
+        const pts = loopEdgeArc(from, to, typeOrEdge, direction, nodes, edges).points;
+        let best = Infinity;
+        for (let i = 1; i < pts.length; i += 1) {
+          best = Math.min(best, distanceToSegment(point, pts[i - 1].x, pts[i - 1].y, pts[i].x, pts[i].y));
+        }
+        return best;
+      }
       const c = edgeCurve(from, to, typeOrEdge, direction);
       let best = Infinity;
       let prevX = c.x1;
@@ -1301,7 +1625,7 @@ window.__ModuleLoader__.load({
     function topoOrder(nodes, edges) {
       const indeg = new Map(nodes.map((n) => [n.id, 0]));
       const adj = new Map(nodes.map((n) => [n.id, []]));
-      for (const e of edges) {
+      for (const e of forwardEdgesUI(edges)) {
         if (!indeg.has(e.from) || !indeg.has(e.to)) continue;
         indeg.set(e.to, indeg.get(e.to) + 1);
         adj.get(e.from).push(e.to);
@@ -1319,10 +1643,10 @@ window.__ModuleLoader__.load({
       return out.length === nodes.length ? out : null;
     }
 
-    /** Ids reachable from the entry Lead via O(V + E) BFS; every other node is skipped at run time. */
+    /** Ids reachable from the entry Lead via O(V + E) BFS over forward edges; every other node is skipped at run time. */
     function reachableFrom(nodes, edges) {
       const adj = new Map();
-      for (const e of edges || []) {
+      for (const e of forwardEdgesUI(edges)) {
         if (!e || !e.from || !e.to) continue;
         if (!adj.has(e.from)) adj.set(e.from, []);
         adj.get(e.from).push(e.to);
@@ -1345,7 +1669,7 @@ window.__ModuleLoader__.load({
      */
     function soloLeadNodeIds(nodes, edges) {
       const list = Array.isArray(nodes) ? nodes : [];
-      const linkList = Array.isArray(edges) ? edges : [];
+      const linkList = forwardEdgesUI(edges);
       const reachable = reachableFrom(list, linkList);
       const byId = new Map(list.map((n) => [n.id, n]));
       const out = new Set();
@@ -1370,13 +1694,14 @@ window.__ModuleLoader__.load({
     function deadEndNodeIds(nodes, edges) {
       const list = Array.isArray(nodes) ? nodes : [];
       const linkList = Array.isArray(edges) ? edges : [];
-      const reachable = reachableFrom(list, linkList);
-      const soloLeads = soloLeadNodeIds(list, linkList);
+      const fwdLinks = forwardEdgesUI(linkList);
+      const reachable = reachableFrom(list, fwdLinks);
+      const soloLeads = soloLeadNodeIds(list, fwdLinks);
       const downstreamLeads = list.filter((n) => n.kind === 'lead' && n.id !== 'lead' && reachable.has(n.id) && !soloLeads.has(n.id));
       if (!downstreamLeads.length) return new Set();
       const hasOut = new Set(linkList.map((e) => e.from));
       const parents = new Map();
-      for (const e of linkList) {
+      for (const e of fwdLinks) {
         if (!parents.has(e.to)) parents.set(e.to, []);
         parents.get(e.to).push(e.from);
       }
@@ -1400,11 +1725,11 @@ window.__ModuleLoader__.load({
       return out;
     }
 
-    /** True when adding `fromId -> toId` would create a cycle or point into entry Lead. */
+    /** True when adding `fromId -> toId` would create a cycle over forward edges or point into entry Lead. */
     function wouldCycle(nodes, edges, fromId, toId) {
       if (!fromId || !toId || fromId === toId || toId === 'lead') return true;
       const adj = new Map();
-      for (const e of edges || []) {
+      for (const e of forwardEdgesUI(edges)) {
         if (!adj.has(e.from)) adj.set(e.from, []);
         adj.get(e.from).push(e.to);
       }
@@ -1420,10 +1745,10 @@ window.__ModuleLoader__.load({
       return false;
     }
 
-    /** Tidy a DAG into symmetrical left-to-right columns by longest-path depth. */
+    /** Tidy a DAG into symmetrical columns/rows by longest-path depth (ignoring loop back-edges). */
     function layoutGraph(nodes, edges, direction) {
       const list = Array.isArray(nodes) ? nodes : [];
-      const linkList = Array.isArray(edges) ? edges : [];
+      const linkList = forwardEdgesUI(edges);
       if (!list.length) return [];
       const reachable = reachableFrom(list, linkList);
       const depth = new Map(list.map((n) => [n.id, n.id === 'lead' ? 0 : 1]));
@@ -1673,6 +1998,54 @@ window.__ModuleLoader__.load({
         { id: 'cd5', from: 'c_yes', to: 'c_final', type: 'prompt' },
         { id: 'cd6', from: 'c_no', to: 'c_final', type: 'prompt' },
       ];
+      const loopNodes = [
+        {
+          id: 'lead', kind: 'lead', label: 'Lead', y: 0,
+          task: en
+            ? 'Implement the requested change and verify with tests: if checks fail, automatically loop back with feedback to fix (up to 3 retries), then hand off to me for final review.'
+            : '实现目标功能并跑测试验证：若测试或检查不通过，自动带着失败原因回环修改（最多 3 次），全部通过后交我终审交付。',
+          provider: '', model: '', role: '',
+        },
+        {
+          id: 'lp_impl', kind: 'agent', y: 0,
+          label: en ? 'Implement' : '编写实现',
+          provider: '', model: '', reasoning: '', preset: 'standard', keepSession: false,
+          role: en
+            ? 'Implement the requested change cleanly. When invoked on a retry round, focus directly on fixing the reported issues and list modified files.'
+            : '按需求完成代码或文档实现；若处于回环修正轮次，针对打回理由直接定点修复并列出改动清单。',
+        },
+        {
+          id: 'lp_test', kind: 'agent', y: 0,
+          label: en ? 'Test & Verify' : '测试与检查',
+          provider: '', model: '', reasoning: '', preset: 'standard', keepSession: false,
+          role: en
+            ? 'Run tests/lint/checks against the implementation and report exact pass/fail status, error logs, and remaining defects.'
+            : '对实现结果运行单测、构建或逐项核验，如实汇报通过情况、具体报错日志与遗留缺陷。',
+        },
+        {
+          id: 'lp_gate', kind: 'condition', y: 0,
+          label: en ? 'Checks Passed?' : '是否通过？',
+          provider: '', model: '', reasoning: '', preset: 'minimal', keepSession: false,
+          role: en
+            ? 'Return pass=true only if all tests/checks passed with no unresolved defects; otherwise return pass=false with a concise, actionable fix reason.'
+            : '仅当测试与检查全部通过且无未解决缺陷时返回 true；否则返回 false，并在理由里写清下一轮需修复的具体问题。',
+        },
+        {
+          id: 'lp_final', kind: 'lead', y: 0,
+          label: en ? 'Lead Final Review' : 'Lead 终审',
+          provider: '', model: '',
+          role: en
+            ? 'Review the verified result (or the round-by-round summary if retries exhausted) and decide whether to ship or intervene.'
+            : '审阅最终通过的改动摘要（或回环达上限后的历次失败记录），确认交付或拍板下一步处理。',
+        },
+      ];
+      const loopEdges = [
+        { id: 'lp1', from: 'lead', to: 'lp_impl', type: 'prompt' },
+        { id: 'lp2', from: 'lp_impl', to: 'lp_test', type: 'prompt' },
+        { id: 'lp3', from: 'lp_test', to: 'lp_gate', type: 'prompt' },
+        { id: 'lp4', from: 'lp_gate', to: 'lp_final', type: 'prompt', branch: 'true' },
+        { id: 'lp5', from: 'lp_gate', to: 'lp_impl', type: 'prompt', branch: 'false', loop: true, maxIterations: 3 },
+      ];
       return [
         {
           id: 'tpl-swe',
@@ -1698,6 +2071,12 @@ window.__ModuleLoader__.load({
           nodes: layoutGraph(condNodes, condEdges, direction),
           edges: condEdges,
         },
+        {
+          id: 'tpl-loop',
+          name: en ? 'Retry Loop: Implement → Test ↺ Fix → Review' : '循环重试：实现 → 测试验收 ↺ 自动修复 → 终审',
+          nodes: layoutGraph(loopNodes, loopEdges, direction),
+          edges: loopEdges,
+        },
       ];
     }
 
@@ -1722,12 +2101,17 @@ window.__ModuleLoader__.load({
       }
 
       const activeIds = new Set(active.map((n) => n.id));
-      const planEdges = edges
-        .filter((e) => (e.from === 'lead' || activeIds.has(e.from)) && activeIds.has(e.to))
+      const candidateEdges = edges.filter((e) => (e.from === 'lead' || activeIds.has(e.from)) && activeIds.has(e.to));
+      const { edges: validEdges } = pruneInvalidLoopEdges(active, candidateEdges);
+      const planEdges = validEdges
         .map((e) => {
           const item = { from: e.from, to: e.to, type: e.type || 'prompt' };
           const b = typeof e.branch === 'string' ? e.branch.trim() : '';
           if (b) item.branch = b;
+          if (e.loop === true) {
+            item.loop = true;
+            item.maxIterations = normalizeMaxIterationsUI(e.maxIterations);
+          }
           return item;
         });
 
@@ -2100,6 +2484,8 @@ window.__ModuleLoader__.load({
       const lastMouseRef = useRef(null);
       const [addMenu, setAddMenu] = useState(null);
       const [ctxMenu, setCtxMenu] = useState(null);
+      const [loopEditEdgeId, setLoopEditEdgeId] = useState(null);
+      const [loopDraft, setLoopDraft] = useState('');
       const rightClickRef = useRef(null);
       const nodeDrag = useRef(null);
       const panDrag = useRef(null);
@@ -2500,6 +2886,7 @@ window.__ModuleLoader__.load({
           e.preventDefault();
           absorbScroll();
           setCtxMenu(null);
+          setLoopEditEdgeId(null);
           const rect = el.getBoundingClientRect();
           const mx = e.clientX - rect.left;
           const my = e.clientY - rect.top;
@@ -2766,9 +3153,125 @@ window.__ModuleLoader__.load({
 
       const deleteEdgeById = (edgeId) => {
         pushSnapshot();
-        setEdges((es) => es.filter((e) => e.id !== edgeId));
+        const remaining = edgesRef.current.filter((e) => e.id !== edgeId);
+        const { edges: cleaned, removedCount } = pruneInvalidLoopEdges(nodesRef.current, remaining);
+        setEdges(cleaned);
         setCtxMenu(null);
-        flash(t('linkCut') + ' ×1');
+        setLoopEditEdgeId(null);
+        flash(t('linkCut') + ' ×1' + (removedCount > 0 ? t('loopPrunedNotice') : ''));
+      };
+
+      const openLoopEditor = (edge) => {
+        if (!edge) { setLoopEditEdgeId(null); return; }
+        setLoopDraft(String(normalizeMaxIterationsUI(edge.maxIterations)));
+        setLoopEditEdgeId(edge.id);
+      };
+
+      const updateLoopMaxIterations = (edgeId, nextVal) => {
+        const clamped = normalizeMaxIterationsUI(nextVal);
+        const cur = edgesRef.current.find((e) => e.id === edgeId);
+        setLoopDraft(String(clamped));
+        if (cur && cur.loop === true && normalizeMaxIterationsUI(cur.maxIterations) === clamped) return;
+        pushSnapshot();
+        setEdges((es) => es.map((e) => (e.id === edgeId ? { ...e, loop: true, maxIterations: clamped } : e)));
+      };
+
+      const createLoopFromSelection = (selIds) => {
+        const curNodes = nodesRef.current;
+        const curEdges = edgesRef.current;
+        const check = analyzeLoopSelection(curNodes, curEdges, selIds);
+        if (!check.ok) {
+          flash(check.reason === 'loopOverlap' ? t('loopOverlap') : t('cycleBlocked'));
+          setCtxMenu(null);
+          return;
+        }
+        pushSnapshot();
+        const stamp = Date.now().toString(36);
+        const exitNode = curNodes.find((n) => n.id === check.exitId);
+        if (!exitNode) { setCtxMenu(null); return; }
+
+        if (check.needsAutoCondition) {
+          const condId = 'n' + stamp + Math.random().toString(36).slice(2, 4);
+          const isTB = directionRef.current === 'tb';
+          const condX = isTB ? (exitNode.x || 0) : ((exitNode.x || 0) + 292);
+          const condY = isTB ? ((exitNode.y || 0) + nodeHeight(exitNode) + 64) : (exitNode.y || 0);
+          const prefs = lastNodePrefsRef.current || {};
+          const condNode = {
+            id: condId,
+            kind: 'condition',
+            x: condX,
+            y: condY,
+            label: t('loopAutoCondLabel'),
+            provider: prefs.provider || '',
+            model: prefs.model || '',
+            reasoning: prefs.reasoning || '',
+            preset: 'minimal',
+            role: t('loopAutoCondRole'),
+          };
+          setNodes((ns) => ns.concat([condNode]));
+          setEdges((es) => {
+            const updated = [];
+            let seq = 0;
+            for (const e of es) {
+              if (!e.loop && e.from === check.exitId) {
+                if (e.type === 'session-ref') {
+                  // Preserve warm session-ref from exitNode as a condition-gated side channel,
+                  // and add a clean prompt wire from the new condition's `true` branch.
+                  updated.push(e);
+                  updated.push({ id: 'e' + stamp + 't' + (seq++), from: condId, to: e.to, type: 'prompt', branch: 'true' });
+                } else {
+                  updated.push({ ...e, from: condId, type: 'prompt', branch: 'true' });
+                }
+              } else {
+                updated.push(e);
+              }
+            }
+            return updated.concat([
+              { id: 'e' + stamp + 'f', from: check.exitId, to: condId, type: 'prompt' },
+              {
+                id: 'e' + stamp + 'l',
+                from: condId,
+                to: check.entryId,
+                type: 'prompt',
+                branch: 'false',
+                loop: true,
+                maxIterations: DEFAULT_LOOP_ITERATIONS,
+              },
+            ]);
+          });
+          setSelectedIds([condId]);
+          setCtxMenu(null);
+          flash(t('loopCreatedAutoCond'));
+          return;
+        }
+
+        const branches = conditionBranchesForUI(exitNode, lang);
+        const usedBranchIds = new Set(curEdges.filter((e) => e.from === exitNode.id).map((e) => (e.branch || branches[0].id)));
+        let chosenBranchId = '';
+        if (!isCustomBranches(exitNode) && !usedBranchIds.has('false')) {
+          chosenBranchId = 'false';
+        } else {
+          for (let i = branches.length - 1; i >= 0; i -= 1) {
+            if (!usedBranchIds.has(branches[i].id)) { chosenBranchId = branches[i].id; break; }
+          }
+        }
+        if (!chosenBranchId) {
+          chosenBranchId = 'c' + stamp.slice(-4);
+          const nextBranches = branches.map((b) => ({ id: b.id, label: b.label }))
+            .concat([{ id: chosenBranchId, label: t('loopRetryBranch') }]);
+          setNodes((ns) => ns.map((n) => (n.id === exitNode.id ? { ...n, branches: nextBranches } : n)));
+        }
+        setEdges((es) => es.concat([{
+          id: 'e' + stamp + 'l',
+          from: exitNode.id,
+          to: check.entryId,
+          type: 'prompt',
+          branch: chosenBranchId,
+          loop: true,
+          maxIterations: DEFAULT_LOOP_ITERATIONS,
+        }]));
+        setCtxMenu(null);
+        flash(t('loopCreated'));
       };
 
       const insertNodeOnEdge = (edgeId, kind, atWorld) => {
@@ -2839,9 +3342,13 @@ window.__ModuleLoader__.load({
       const deleteNode = (id) => {
         if (id === 'lead') { flash(t('leadLocked')); return; }
         pushSnapshot();
-        setNodes((ns) => ns.filter((n) => n.id !== id));
-        setEdges((es) => es.filter((e) => e.from !== id && e.to !== id));
+        const nextNodes = nodesRef.current.filter((n) => n.id !== id);
+        const remainingEdges = edgesRef.current.filter((e) => e.from !== id && e.to !== id);
+        const { edges: cleaned } = pruneInvalidLoopEdges(nextNodes, remainingEdges);
+        setNodes(nextNodes);
+        setEdges(cleaned);
         setSelectedIds([]);
+        setLoopEditEdgeId(null);
         flash(t('deletedNode'));
       };
 
@@ -2852,9 +3359,13 @@ window.__ModuleLoader__.load({
         if (!targets.length) { flash(t('leadLocked')); return; }
         const drop = new Set(targets);
         pushSnapshot();
-        setNodes((ns) => ns.filter((n) => !drop.has(n.id)));
-        setEdges((es) => es.filter((e) => !drop.has(e.from) && !drop.has(e.to)));
+        const nextNodes = nodesRef.current.filter((n) => !drop.has(n.id));
+        const remainingEdges = edgesRef.current.filter((e) => !drop.has(e.from) && !drop.has(e.to));
+        const { edges: cleaned } = pruneInvalidLoopEdges(nextNodes, remainingEdges);
+        setNodes(nextNodes);
+        setEdges(cleaned);
         setSelectedIds([]);
+        setLoopEditEdgeId(null);
         flash(targets.length === 1 ? t('deletedNode') : t('deletedNodes') + ' ×' + targets.length);
       };
 
@@ -2986,6 +3497,7 @@ window.__ModuleLoader__.load({
         setOpenModelFor(null);
         setAddMenu(null);
         setCtxMenu(null);
+        setLoopEditEdgeId(null);
         e.preventDefault();
         e.stopPropagation();
         if (toggledOff) return;
@@ -3017,6 +3529,7 @@ window.__ModuleLoader__.load({
         setRoleEditFor(null);
         setDecisionViewFor(null);
         setRefsEditFor(null);
+        setLoopEditEdgeId(null);
       };
 
       const addNodeRef = (node) => {
@@ -3093,38 +3606,62 @@ window.__ModuleLoader__.load({
         e.stopPropagation();
       };
 
+      const tryAddEdge = (fromId, toId, type, branch, preferredMaxIter) => {
+        if (!fromId || !toId || fromId === toId) return;
+        const b = typeof branch === 'string' ? branch.trim() : '';
+        if (wouldCycle(nodesRef.current, edgesRef.current, fromId, toId)) {
+          const loopOk = canLinkAsLoop(nodesRef.current, edgesRef.current, fromId, toId);
+          if (loopOk.ok) {
+            pushSnapshot();
+            const loopBranch = b || 'false';
+            const maxIter = normalizeMaxIterationsUI(preferredMaxIter);
+            setEdges((es) => {
+              if (es.some((x) => x.from === fromId && x.to === toId && (x.branch || '') === loopBranch)) return es;
+              return [...es, {
+                id: 'e' + Date.now().toString(36),
+                from: fromId,
+                to: toId,
+                type: 'prompt',
+                branch: loopBranch,
+                loop: true,
+                maxIterations: maxIter,
+              }];
+            });
+            flash(t('loopCreated'));
+          } else {
+            flash(loopOk.reason === 'loopOverlap' ? t('loopOverlap') : t('cycleBlocked'));
+          }
+          return;
+        }
+        pushSnapshot();
+        setEdges((es) => {
+          if (es.some((x) => x.from === fromId && x.to === toId && x.type === type && (x.branch || '') === b)) return es;
+          const nextEdge = { id: 'e' + Date.now().toString(36), from: fromId, to: toId, type };
+          if (b) nextEdge.branch = b;
+          return [...es, nextEdge];
+        });
+      };
+
       /** Release over an output socket: completes a drag that started at the unified left input. */
       const onOutputUp = (e, id, type, branch) => {
         if (!pending || pending.dir !== 'in') return;
         pendingHandledRef.current = true;
         e.preventDefault();
         e.stopPropagation();
-        const b = typeof branch === 'string' ? branch.trim() : '';
-        const toId = pending.toId;
-        if (toId && toId !== id) {
-          if (wouldCycle(nodesRef.current, edgesRef.current, id, toId)) {
-            flash(t('cycleBlocked'));
-          } else {
-            pushSnapshot();
-            setEdges((es) => {
-              if (es.some((x) => x.from === id && x.to === toId && x.type === type && (x.branch || '') === b)) return es;
-              const nextEdge = { id: 'e' + Date.now().toString(36), from: id, to: toId, type };
-              if (b) nextEdge.branch = b;
-              return [...es, nextEdge];
-            });
-          }
-        }
+        tryAddEdge(id, pending.toId, type || 'prompt', branch, pending.maxIterations);
         setPending(null);
         setDragging(false);
       };
 
-      // Unified left input: dragging a connected input detaches the latest wire;
+      // Unified left input: dragging a connected input detaches the latest forward wire
+      // (preferring non-loop incoming links so loop back-edges aren't accidentally pulled);
       // dragging a free input starts a reverse wire that adopts whichever right output it drops onto.
       const onInputDown = (e, id) => {
         e.preventDefault();
         e.stopPropagation();
         const incoming = edges.filter((x) => x.to === id);
-        const link = incoming[incoming.length - 1];
+        const forwardIncoming = incoming.filter((x) => !x.loop);
+        const link = forwardIncoming.length ? forwardIncoming[forwardIncoming.length - 1] : incoming[incoming.length - 1];
         if (!link) {
           const node = nodes.find((n) => n.id === id);
           if (!node) return;
@@ -3136,7 +3673,9 @@ window.__ModuleLoader__.load({
           return;
         }
         pushSnapshot();
-        setEdges((es) => es.filter((x) => x.id !== link.id));
+        const remaining = edgesRef.current.filter((x) => x.id !== link.id);
+        const { edges: cleaned } = pruneInvalidLoopEdges(nodesRef.current, remaining);
+        setEdges(cleaned);
         const from = nodes.find((n) => n.id === link.from);
         if (!from) return;
         const b = typeof link.branch === 'string' ? link.branch.trim() : '';
@@ -3145,7 +3684,18 @@ window.__ModuleLoader__.load({
         const sx = pos.x;
         const sy = pos.y;
         const color = edgeColorFor(from, link);
-        setPending({ dir: 'out', fromId: link.from, type: linkType, branch: b, color, sx, sy, x: sx, y: sy });
+        setPending({
+          dir: 'out',
+          fromId: link.from,
+          type: linkType,
+          branch: b,
+          maxIterations: link.loop ? normalizeMaxIterationsUI(link.maxIterations) : undefined,
+          color,
+          sx,
+          sy,
+          x: sx,
+          y: sy,
+        });
         setDragging(true);
       };
 
@@ -3154,22 +3704,7 @@ window.__ModuleLoader__.load({
         pendingHandledRef.current = true;
         e.preventDefault();
         e.stopPropagation();
-        if (pending.fromId !== id) {
-          const fromId = pending.fromId;
-          const type = pending.type || 'prompt';
-          const b = typeof pending.branch === 'string' ? pending.branch.trim() : '';
-          if (wouldCycle(nodesRef.current, edgesRef.current, fromId, id)) {
-            flash(t('cycleBlocked'));
-          } else {
-            pushSnapshot();
-            setEdges((es) => {
-              if (es.some((x) => x.from === fromId && x.to === id && x.type === type && (x.branch || '') === b)) return es;
-              const nextEdge = { id: 'e' + Date.now().toString(36), from: fromId, to: id, type };
-              if (b) nextEdge.branch = b;
-              return [...es, nextEdge];
-            });
-          }
-        }
+        tryAddEdge(pending.fromId, id, pending.type || 'prompt', pending.branch, pending.maxIterations);
         setPending(null);
         setDragging(false);
       };
@@ -3234,8 +3769,8 @@ window.__ModuleLoader__.load({
       const keyActionsRef = useRef(null);
       keyActionsRef.current = {
         undo, redo, deleteSelected, duplicateSelected, openAddMenuAtCursor, addNode, fitView, autoLayout, toggleDirection, flash, t,
-        addMenu, ctxMenu, roleEditFor, openModelFor, menuOpen, presetOpen, helpOpen, shortcutsOpen, recordingAction, decisionViewFor, refsEditFor,
-        setAddMenu, setCtxMenu, setRoleEditFor, setOpenModelFor, setMenuOpen, setPresetOpen, setHelpOpen, setShortcutsOpen, setRecordingAction, setShortcuts, setDecisionViewFor, setRefsEditFor,
+        addMenu, ctxMenu, loopEditEdgeId, roleEditFor, openModelFor, menuOpen, presetOpen, helpOpen, shortcutsOpen, recordingAction, decisionViewFor, refsEditFor,
+        setAddMenu, setCtxMenu, setLoopEditEdgeId, setRoleEditFor, setOpenModelFor, setMenuOpen, setPresetOpen, setHelpOpen, setShortcutsOpen, setRecordingAction, setShortcuts, setDecisionViewFor, setRefsEditFor,
       };
       useEffect(() => {
         const isEditable = (target) => {
@@ -3264,10 +3799,11 @@ window.__ModuleLoader__.load({
             return;
           }
           if (ev.key === 'Escape') {
-            if (act.addMenu || act.ctxMenu || act.roleEditFor || act.openModelFor || act.menuOpen || act.presetOpen || act.helpOpen || act.shortcutsOpen || act.decisionViewFor || act.refsEditFor) {
+            if (act.addMenu || act.ctxMenu || act.loopEditEdgeId || act.roleEditFor || act.openModelFor || act.menuOpen || act.presetOpen || act.helpOpen || act.shortcutsOpen || act.decisionViewFor || act.refsEditFor) {
               ev.preventDefault();
               act.setAddMenu(null);
               act.setCtxMenu(null);
+              act.setLoopEditEdgeId(null);
               act.setRoleEditFor(null);
               act.setOpenModelFor(null);
               act.setMenuOpen(false);
@@ -3382,6 +3918,7 @@ window.__ModuleLoader__.load({
         if (menuOpen) setMenuOpen(false);
         if (addMenu) setAddMenu(null);
         if (ctxMenu) setCtxMenu(null);
+        if (loopEditEdgeId) setLoopEditEdgeId(null);
         if (presetOpen) setPresetOpen(null);
         e.preventDefault();
         try { window.getSelection().removeAllRanges(); } catch (_sel) { /* ignore */ }
@@ -3439,7 +3976,7 @@ window.__ModuleLoader__.load({
               const source = nodeMap.get(edge.from);
               const target = nodeMap.get(edge.to);
               if (!source || !target) continue;
-              if (distanceToEdge(canvasSpot, source, target, edge, directionRef.current) <= threshold) {
+              if (distanceToEdge(canvasSpot, source, target, edge, directionRef.current, nodes, edges) <= threshold) {
                 cutHits.current.add(edge.id);
               }
             }
@@ -3478,7 +4015,7 @@ window.__ModuleLoader__.load({
                 const source = nodeMap.get(edge.from);
                 const target = nodeMap.get(edge.to);
                 if (!source || !target) continue;
-                const dist = distanceToEdge(canvasSpot, source, target, edge, directionRef.current);
+                const dist = distanceToEdge(canvasSpot, source, target, edge, directionRef.current, nodesRef.current, edgesRef.current);
                 if (dist <= threshold && dist < bestDist) {
                   bestDist = dist;
                   hitEdge = edge;
@@ -3491,6 +4028,7 @@ window.__ModuleLoader__.load({
               setRoleEditFor(null);
               setDecisionViewFor(null);
               setRefsEditFor(null);
+              setLoopEditEdgeId(null);
               if (hitEdge) {
                 const pos = clampMenuPos(cx, cy, wrapRect.width, wrapRect.height, 180, 120);
                 setCtxMenu({ kind: 'edge', edgeId: hitEdge.id, sx: pos.sx, sy: pos.sy, wx: rc.start.x, wy: rc.start.y });
@@ -3511,8 +4049,10 @@ window.__ModuleLoader__.load({
           cutHits.current = new Set();
           if (victims.length) {
             pushSnapshot();
-            setEdges((es) => es.filter((x) => !victimIds.has(x.id)));
-            flash(t('linkCut') + ' ×' + victims.length);
+            const remaining = edgesRef.current.filter((x) => !victimIds.has(x.id));
+            const { edges: cleaned, removedCount } = pruneInvalidLoopEdges(nodesRef.current, remaining);
+            setEdges(cleaned);
+            flash(t('linkCut') + ' ×' + victims.length + (removedCount > 0 ? t('loopPrunedNotice') : ''));
           }
         }
         if (cutPath.length) { setCutPath([]); setCutVictims([]); }
@@ -3659,6 +4199,10 @@ window.__ModuleLoader__.load({
             };
             const b = typeof e.branch === 'string' ? e.branch.trim() : '';
             if (b) item.branch = b;
+            if (e.loop === true) {
+              item.loop = true;
+              item.maxIterations = normalizeMaxIterationsUI(e.maxIterations);
+            }
             return item;
           });
           if (!merge) return incoming;
@@ -3668,8 +4212,20 @@ window.__ModuleLoader__.load({
             && String(r.to) === e.to
             && (!r.type || r.type === e.type)
             && (!r.branch || r.branch === e.branch));
-          const kept = existing.filter((e) => !matchesDrop(e) && !removedNodes.has(e.from) && !removedNodes.has(e.to));
           const keyOf = (e) => e.from + '>' + e.to + '|' + e.type + '|' + (e.branch || '');
+          const incomingByKey = new Map(incoming.map((e) => [keyOf(e), e]));
+          const kept = existing
+            .filter((e) => !matchesDrop(e) && !removedNodes.has(e.from) && !removedNodes.has(e.to))
+            .map((e) => {
+              const inc = incomingByKey.get(keyOf(e));
+              if (!inc) return e;
+              if (inc.loop) return { ...e, loop: true, maxIterations: inc.maxIterations };
+              if (e.loop && !inc.loop) {
+                const { loop: _l, maxIterations: _m, ...rest } = e;
+                return rest;
+              }
+              return e;
+            });
           const seen = new Set(kept.map(keyOf));
           const added = incoming.filter((e) => !removedNodes.has(e.from) && !removedNodes.has(e.to) && !seen.has(keyOf(e)));
           return kept.concat(added);
@@ -4097,7 +4653,7 @@ window.__ModuleLoader__.load({
       const nodeById = new Map(nodes.map((n) => [n.id, n]));
       const inColorByNode = new Map();
       const inCountByNode = new Map();
-      const inPriority = (e) => (e.type === 'session-ref' ? 3 : (e.type === 'structured' ? 2 : (e.branch ? 1.5 : 1)));
+      const inPriority = (e) => (e.loop ? 0.5 : (e.type === 'session-ref' ? 3 : (e.type === 'structured' ? 2 : (e.branch ? 1.5 : 1))));
       const inPrioByNode = new Map();
       const connectedOut = new Set();
       for (const e of edges) {
@@ -4165,16 +4721,39 @@ window.__ModuleLoader__.load({
         : {};
       const prunedSet = new Set(enabled && runState && Array.isArray(runState.pruned) ? runState.pruned : []);
       const blockedEdgeSet = new Set(enabled && runState && Array.isArray(runState.blockedEdges) ? runState.blockedEdges : []);
+      const loopCountsMap = (enabled && runState && runState.loopCounts && typeof runState.loopCounts === 'object')
+        ? runState.loopCounts
+        : {};
+      const nodeAttemptsMap = (enabled && runState && runState.nodeAttempts && typeof runState.nodeAttempts === 'object')
+        ? runState.nodeAttempts
+        : {};
+      const loopGroups = loopGroupsForUI(nodes, edges);
       const edgeKeyForState = (e) => String(e.from) + '->' + String(e.to) + '|' + String(e.type || 'prompt') + '|' + String(e.branch || '');
+      const loopPillItems = [];
 
       const edgeEls = edges.map((edge) => {
         const from = nodeById.get(edge.from);
         const to = nodeById.get(edge.to);
         if (!from || !to) return null;
-        const color = edgeColorFor(from, edge);
-        const d = edgePath(from, to, edge, direction);
+        const isLoop = edge.loop === true;
+        const loopInfo = isLoop ? loopGroups.byEdge.get(edge.id || (edge.from + '->' + edge.to)) : null;
+        const color = isLoop ? ((loopInfo && loopInfo.color) || '#f0883e') : edgeColorFor(from, edge);
+        const loopArc = isLoop ? loopEdgeArc(from, to, edge, direction, nodes, edges) : null;
+        const d = loopArc ? loopArc.path : edgePath(from, to, edge, direction, nodes, edges);
         const highlighted = cutVictims.includes(edge.id);
         const isPrunedEdge = !highlighted && (blockedEdgeSet.has(edgeKeyForState(edge)) || prunedSet.has(edge.from) || prunedSet.has(edge.to));
+        if (loopArc) {
+          const live = loopCountsMap[edge.id] || loopCountsMap[edgeKeyForState(edge)] || null;
+          loopPillItems.push({
+            edge,
+            color,
+            midX: loopArc.midX,
+            midY: loopArc.midY,
+            maxIterations: normalizeMaxIterationsUI(edge.maxIterations),
+            liveCount: live ? Number(live.count || 0) : 0,
+            dimmed: isPrunedEdge,
+          });
+        }
         const hasSel = selectedSet.size > 0;
         const linkedToSel = hasSel && (selectedSet.has(edge.from) || selectedSet.has(edge.to));
         const toRunning = enabled && statusById[edge.to] === 'running';
@@ -4198,11 +4777,24 @@ window.__ModuleLoader__.load({
         const isCompletedLink = enabled && !highlighted && !isPrunedEdge && fromSettled && toSettled;
         const dimmed = isPrunedEdge || (hasSel && !linkedToSel && !highlighted && !isFlowing);
         const strokeColor = highlighted ? '#e5534b' : color;
-        const baseWidth = highlighted ? 3 : (linkedToSel || isFlowing ? 2.6 : 2);
-        const baseOpacity = isPrunedEdge ? 0.22 : (dimmed ? 0.26 : (isFlowing || linkedToSel ? 1 : (isCompletedLink ? 0.92 : 0.78)));
+        const baseWidth = highlighted ? 3 : (linkedToSel || isFlowing || isLoop ? 2.4 : 2);
+        const baseOpacity = isPrunedEdge ? 0.22 : (dimmed ? 0.26 : (isFlowing || linkedToSel || isLoop ? 0.96 : (isCompletedLink ? 0.92 : 0.78)));
         const useGlow = fxLevel === 'vivid' && !dimmed;
         const showDashFlow = isFlowing && fxLevel !== 'minimal';
         const showBead = isFlowing && fxLevel === 'vivid';
+        // Arrowhead on loop entry point so the retry direction is unmistakable
+        let loopArrow = null;
+        if (loopArc && loopArc.points.length >= 2) {
+          const endPt = loopArc.points[loopArc.points.length - 1];
+          const prevPt = loopArc.points[loopArc.points.length - 2];
+          const ang = Math.atan2(endPt.y - prevPt.y, endPt.x - prevPt.x);
+          const sz = 7;
+          const ax1 = endPt.x - sz * Math.cos(ang - 0.5);
+          const ay1 = endPt.y - sz * Math.sin(ang - 0.5);
+          const ax2 = endPt.x - sz * Math.cos(ang + 0.5);
+          const ay2 = endPt.y - sz * Math.sin(ang + 0.5);
+          loopArrow = endPt.x.toFixed(1) + ',' + endPt.y.toFixed(1) + ' ' + ax1.toFixed(1) + ',' + ay1.toFixed(1) + ' ' + ax2.toFixed(1) + ',' + ay2.toFixed(1);
+        }
 
         return h('g', { key: edge.id, style: { pointerEvents: 'none' } },
           // Vector halo layers instead of an SVG objectBoundingBox <filter>, which
@@ -4228,8 +4820,13 @@ window.__ModuleLoader__.load({
             stroke: strokeColor,
             strokeWidth: baseWidth,
             strokeOpacity: showDashFlow ? 0.35 : baseOpacity,
-            strokeDasharray: isPrunedEdge ? '4 4' : undefined,
+            strokeDasharray: isLoop ? '6 4' : (isPrunedEdge ? '4 4' : undefined),
             fill: 'none',
+          }),
+          loopArrow && h('polygon', {
+            points: loopArrow,
+            fill: strokeColor,
+            fillOpacity: baseOpacity,
           }),
           showDashFlow && fxLevel === 'vivid' && h('path', {
             d,
@@ -4958,11 +5555,14 @@ window.__ModuleLoader__.load({
               const target = nodeById.get(ctxMenu.nodeId);
               if (!target) return null;
               const multiSel = selectedIds.length > 1 && selectedSet.has(target.id);
-              const nonLeadCount = (multiSel ? selectedIds : [target.id]).filter((id) => id !== 'lead').length;
+              const selList = multiSel ? selectedIds : [target.id];
+              const nonLeadCount = selList.filter((id) => id !== 'lead').length;
               const suffix = nonLeadCount > 1 ? ' ×' + nonLeadCount : '';
               const latestRun = target.kind !== 'lead' ? runsById[target.id] : null;
+              const existingLoop = loopGroups.byNode.get(target.id) || null;
+              const loopCheck = !existingLoop ? analyzeLoopSelection(nodes, edges, selList) : { ok: false };
               return h('div', {
-                style: { ...S.addMenu, minWidth: '172px', left: ctxMenu.sx + 'px', top: ctxMenu.sy + 'px' },
+                style: { ...S.addMenu, minWidth: '176px', left: ctxMenu.sx + 'px', top: ctxMenu.sy + 'px' },
                 onMouseDown: (e) => e.stopPropagation(),
                 onContextMenu: (e) => e.preventDefault(),
               },
@@ -4970,6 +5570,18 @@ window.__ModuleLoader__.load({
                 menuRow('edit', t('ctxEditText'), () => { setCtxMenu(null); setRoleEditFor(target.id); }),
                 menuRow('refs', t('ctxManageRefs'), () => { setCtxMenu(null); setRefsEditFor(target.id); }),
                 latestRun && menuRow('chat', t('ctxOpenChat'), () => { setCtxMenu(null); openNodeSession(target); }),
+                existingLoop && h('div', { style: S.ctxDivider }),
+                existingLoop && menuRow('edit-loop', t('ctxEditLoop'), () => {
+                  setCtxMenu(null);
+                  openLoopEditor(existingLoop.edge);
+                }),
+                existingLoop && menuRow('rm-loop', t('ctxRemoveLoop'), () => deleteEdgeById(existingLoop.edge.id), { danger: true }),
+                !existingLoop && loopCheck.ok && h('div', { style: S.ctxDivider }),
+                !existingLoop && loopCheck.ok && menuRow(
+                  'make-loop',
+                  loopCheck.needsAutoCondition ? t('ctxMakeLoopAuto') : t('ctxMakeLoop'),
+                  () => createLoopFromSelection(selList),
+                ),
                 nonLeadCount > 0 && h('div', { style: S.ctxDivider }),
                 nonLeadCount > 0 && menuRow('dup', t('ctxDup') + suffix, () => { setCtxMenu(null); duplicateSelected(); }, { hint: shortcuts.duplicate || '' }),
                 nonLeadCount > 0 && menuRow('del', t('ctxDelNode') + suffix, () => {
@@ -4988,10 +5600,21 @@ window.__ModuleLoader__.load({
                 onContextMenu: (e) => e.preventDefault(),
               },
                 h('div', { style: S.addMenuHead }, t('ctxEdgeTitle')),
-                menuRow('ins-agent', t('ctxInsertAgent'), () => insertNodeOnEdge(targetEdge.id, 'agent', { x: ctxMenu.wx, y: ctxMenu.wy })),
-                menuRow('ins-cond', t('ctxInsertCond'), () => insertNodeOnEdge(targetEdge.id, 'condition', { x: ctxMenu.wx, y: ctxMenu.wy })),
-                h('div', { style: S.ctxDivider }),
-                menuRow('del-edge', t('ctxDelEdge'), () => deleteEdgeById(targetEdge.id), { danger: true }),
+                targetEdge.loop
+                  ? h(React.Fragment, null,
+                      menuRow('edit-loop', t('ctxEditLoop'), () => {
+                        setCtxMenu(null);
+                        openLoopEditor(targetEdge);
+                      }),
+                      h('div', { style: S.ctxDivider }),
+                      menuRow('rm-loop', t('ctxRemoveLoop'), () => deleteEdgeById(targetEdge.id), { danger: true }),
+                    )
+                  : h(React.Fragment, null,
+                      menuRow('ins-agent', t('ctxInsertAgent'), () => insertNodeOnEdge(targetEdge.id, 'agent', { x: ctxMenu.wx, y: ctxMenu.wy })),
+                      menuRow('ins-cond', t('ctxInsertCond'), () => insertNodeOnEdge(targetEdge.id, 'condition', { x: ctxMenu.wx, y: ctxMenu.wy })),
+                      h('div', { style: S.ctxDivider }),
+                      menuRow('del-edge', t('ctxDelEdge'), () => deleteEdgeById(targetEdge.id), { danger: true }),
+                    ),
               );
             }
             return h('div', {
@@ -5079,6 +5702,101 @@ window.__ModuleLoader__.load({
                 return h('path', { d, stroke: color, strokeWidth: 2, strokeDasharray: '4 4', fill: 'none' });
               })(),
             ),
+            loopPillItems.map((item) => {
+              const isOpen = loopEditEdgeId === item.edge.id;
+              const pillText = item.liveCount > 0
+                ? ('↺ ' + item.liveCount + '/' + item.maxIterations)
+                : ('↺ ×' + item.maxIterations);
+              const commitLoopDraft = (closeAfter) => {
+                const v = parseInt(String(loopDraft || '').trim(), 10);
+                if (Number.isFinite(v)) updateLoopMaxIterations(item.edge.id, v);
+                else setLoopDraft(String(item.maxIterations));
+                if (closeAfter) setLoopEditEdgeId(null);
+              };
+              return h('div', {
+                key: 'loop-pill-' + item.edge.id,
+                style: {
+                  ...S.loopPill,
+                  left: item.midX + 'px',
+                  top: item.midY + 'px',
+                  border: '1.5px solid ' + item.color,
+                  color: item.color,
+                  opacity: item.dimmed && !isOpen ? 0.42 : 1,
+                  zIndex: isOpen ? 55 : 18,
+                },
+                title: t('loopTipPill'),
+                onMouseDown: (e) => e.stopPropagation(),
+                onContextMenu: (e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  if (isOpen) setLoopEditEdgeId(null);
+                  else openLoopEditor(item.edge);
+                },
+                onClick: (e) => {
+                  e.stopPropagation();
+                  setCtxMenu(null);
+                  if (isOpen) setLoopEditEdgeId(null);
+                  else openLoopEditor(item.edge);
+                },
+              },
+                h('span', null, pillText),
+                isOpen && h('div', {
+                  style: S.loopPopover,
+                  onMouseDown: (e) => e.stopPropagation(),
+                  onClick: (e) => e.stopPropagation(),
+                },
+                  h('div', {
+                    style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px', fontSize: '10px', color: C.dim },
+                  },
+                    h('span', null, t('loopModalTitle')),
+                    h('button', {
+                      type: 'button',
+                      style: { background: 'transparent', border: 'none', color: C.dim, cursor: 'pointer', fontSize: '12px', padding: '0 2px' },
+                      onClick: () => setLoopEditEdgeId(null),
+                    }, '×'),
+                  ),
+                  h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', marginBottom: '7px' } },
+                    h('button', {
+                      type: 'button',
+                      style: S.loopStepBtn,
+                      disabled: item.maxIterations <= 1,
+                      onClick: () => updateLoopMaxIterations(item.edge.id, item.maxIterations - 1),
+                    }, '−'),
+                    h('input', {
+                      type: 'text',
+                      inputMode: 'numeric',
+                      style: S.loopNumInput,
+                      value: loopDraft,
+                      onChange: (e) => {
+                        const raw = e.target.value.replace(/[^\d]/g, '').slice(0, 2);
+                        setLoopDraft(raw);
+                      },
+                      onBlur: () => commitLoopDraft(false),
+                      onKeyDown: (e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          commitLoopDraft(true);
+                        } else if (e.key === 'Escape') {
+                          e.preventDefault();
+                          setLoopEditEdgeId(null);
+                        }
+                      },
+                    }),
+                    h('button', {
+                      type: 'button',
+                      style: S.loopStepBtn,
+                      disabled: item.maxIterations >= MAX_LOOP_ITERATIONS,
+                      onClick: () => updateLoopMaxIterations(item.edge.id, item.maxIterations + 1),
+                    }, '+'),
+                  ),
+                  h('button', {
+                    type: 'button',
+                    style: { ...S.btn, width: '100%', padding: '3px 6px', fontSize: '10px', color: '#e5534b', textAlign: 'center' },
+                    onClick: () => deleteEdgeById(item.edge.id),
+                  }, t('ctxRemoveLoop')),
+                ),
+              );
+            }),
             nodes.map((node) => {
               const isEntry = node.id === 'lead';
               const isLeadKind = node.kind === 'lead';
@@ -5127,6 +5845,8 @@ window.__ModuleLoader__.load({
                     : 'linear-gradient(90deg, #2f81f7 0%, #58d580 50%, #2f81f7 100%)'))
                 : (isFailed ? '#e5534b' : (isLeadKind ? '#2f81f7' : (isCondKind ? '#d29922' : '#3fb950')));
               const isPruned = enabled && prunedSet.has(node.id);
+              const nodeLoop = loopGroups.byNode.get(node.id) || null;
+              const nodeAttempt = nodeAttemptsMap[node.id] || null;
               const condDecision = isCondKind ? (decisionsById[node.id] || null) : null;
               const verdictInfo = condDecision ? conditionVerdictSummary(condDecision, lang) : null;
               const hasOpenPopover = decisionViewFor === node.id
@@ -5145,12 +5865,22 @@ window.__ModuleLoader__.load({
                   ...(isLeadKind ? S.leadNode : null),
                   ...(isInactive || isPruned ? S.orphanNode : null),
                   ...(stateStyle || null),
+                  ...(nodeLoop ? { outline: '1.5px dashed ' + nodeLoop.color, outlineOffset: '3px' } : null),
                   ...(hasOpenPopover ? { zIndex: 40 } : null),
                 },
                 title: isPruned ? t('tipPruned') : (isOrphan ? t('orphanTip') : (isSoloLead ? t('tipSoloLead') : (isDeadEnd ? t('tipDeadEnd') : undefined))),
                 onMouseDown: (e) => onNodeDown(e, node.id),
                 onContextMenu: (e) => onNodeContextMenu(e, node),
               },
+                nodeLoop && h('div', {
+                  style: {
+                    ...S.loopNodeTag,
+                    color: nodeLoop.color,
+                    border: '1px solid ' + nodeLoop.color,
+                  },
+                }, nodeAttempt && nodeAttempt.retry > 0
+                  ? ('↺ ' + nodeAttempt.retry + '/' + nodeAttempt.max)
+                  : ('↺' + nodeLoop.index)),
                 h('div', {
                   className: (isRunning || isLeadReady) && fxLevel === 'vivid' ? 'dsh-wc-topbar-vivid' : undefined,
                   style: {
@@ -5562,7 +6292,7 @@ window.__ModuleLoader__.load({
           try { console.error('[workflow-canvas] apply failed', error); } catch (_e) { /* ignore */ }
         }
       },
-      __test: { topoOrder, wouldCycle, soloLeadNodeIds, layoutGraph, builtinTemplates, deadEndNodeIds, nextEffectLevel, nextMaxParallel, dropdownAlign, zoomAroundPoint, scrubZoom, buildPlan, loadDoc, saveDoc, storageKey, socketCenterY, nodeHeight, conditionBranchesForUI, distanceToEdge, edgeCurve, compatibleTargetsForWire, conditionVerdictSummary, entryRunButtonState, outputSocketX, inputSocketPos, outputSocketPos, normalizeRefsUI, clampMenuPos, cloneSelection, nextSelectionOnNodeClick, DEFAULT_SHORTCUTS, normalizeShortcut, formatShortcutFromEvent, matchesShortcut, applyShortcutBinding },
+      __test: { topoOrder, wouldCycle, soloLeadNodeIds, layoutGraph, builtinTemplates, deadEndNodeIds, nextEffectLevel, nextMaxParallel, dropdownAlign, zoomAroundPoint, scrubZoom, buildPlan, loadDoc, saveDoc, storageKey, socketCenterY, nodeHeight, conditionBranchesForUI, distanceToEdge, edgeCurve, compatibleTargetsForWire, conditionVerdictSummary, entryRunButtonState, outputSocketX, inputSocketPos, outputSocketPos, normalizeRefsUI, clampMenuPos, cloneSelection, nextSelectionOnNodeClick, DEFAULT_SHORTCUTS, normalizeShortcut, formatShortcutFromEvent, matchesShortcut, applyShortcutBinding, normalizeMaxIterationsUI, loopMemberIdsUI, loopGroupsForUI, pruneInvalidLoopEdges, canLinkAsLoop, analyzeLoopSelection, loopEdgeArc },
     };
   },
 });

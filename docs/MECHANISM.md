@@ -60,14 +60,15 @@ flowchart LR
 When `canvas_workflow` runs, `executePlan` executes the following pipeline:
 
 1. **Entry stripping & task override**: The entry `lead` node is stripped (`withoutEntry`) and never spawned. If `args.task` is provided, it overrides `plan.task` for this run (allowing blank-task templates to be reused straight from chat).
-2. **Cycle validation (Kahn topological sort)**: `orderNodes` validates the DAG is acyclic (the client also blocks cycles interactively via `wouldCycle`).
-3. **Reachability pruning**: BFS from `'lead'` filters out disconnected nodes. Unreachable nodes are drawn dashed, skipped at run time, and listed in `skipped` without burning tokens.
-4. **Event-driven concurrency pool, conditional pruning & partial resume**:
+2. **DAG & controlled-loop validation**: `orderNodes` validates forward edges (`!e.loop`) via Kahn topological sort; `validateLoopEdges` separately verifies controlled retry edges (`e.loop === true`) leave a condition node, target a strict forward ancestor (never entry Lead), and do not overlap/cross.
+3. **Reachability & inactive pruning**: BFS from `'lead'` over forward edges filters out disconnected nodes, blank-role solo chained Leads without subagent upstream, and dangling dead-end subagents; all render dashed and are listed in `skipped` without burning tokens.
+4. **Event-driven concurrency pool, conditional pruning, retry loops & partial resume**:
    - In-progress state lives in `runBySession`, and each completed or halted run is snapshotted into `lastRunBySession`.
    - Instead of a strict per-wave barrier, the executor runs an **event-driven concurrency pool (`inFlight` + `Promise.race`, default 4, configurable 1–8)**:
      - The instant any running subagent finishes, newly unblocked downstream subagents launch immediately — fast branches never stall waiting for slower siblings.
      - **Condition nodes (`kind: "condition"`)** run as lightweight read-only (`minimal`) judges with a strict structured `outputSchema` (supporting binary `if/else`, multi-way `switch/case`, and `multiMatch` parallel fan-out). Unmatched outgoing edges are blocked and unchosen branches are pruned via ancestor-aware BFS (so an upstream `session-ref` side wire cannot bypass a vetoed branch). If zero branches match or the condition node itself fails, it never guesses a branch — it skips intermediate branches and hands off to the nearest downstream Lead (or halts cleanly if none exists).
-     - Intermediate **non-entry Lead nodes** pause with `status: "need-lead"`; a **terminal Lead** (zero remaining downstream work) finishes in one shot with `status: "done"` and `finalLead`.
+     - **Controlled retry loops (`loop: true, maxIterations: 1–10`)**: when a condition matches a loop back-edge (taking priority over forward branches under `multiMatch`), if within per-loop and global safety limits (`20`), the executor resets strictly `descendants(target) ∩ ancestors(source)` (bypass nodes outside the loop never re-run), injects the rejection reason into the entry node (supporting both subagents and Lead nodes), and reuses its healthy warm session with an incremental correction prompt (or starts fresh if the prior round crashed/returned empty). At the limit, it circuit-breaks and hands off `1..N` round summaries to the nearest downstream Lead.
+     - Intermediate **non-entry Lead nodes** (including `Lead → Lead` stage chains) pause with `status: "need-lead"`; a **terminal Lead** (zero remaining downstream work) finishes in one shot with `status: "done"` and `finalLead`.
    - **`retryFailed: true`** and **`fromNodes: [...]`** reuse succeeded outputs from `lastRunBySession` and re-run only failed/target nodes plus their downstream; `reset: true` discards progress and starts from scratch.
 
 ```mermaid
@@ -121,7 +122,7 @@ The three link types are distinct runtime channels, not just visual colour codin
 ## 5. Live Status Pills & Click-to-Open Subagent Chats
 
 1. **Node tagging**: `spawnOnce` tags every spawned child with `label: "<node.label>#<node.id>"`.
-2. **Catalog projection tracking**: While a turn runs (every 700ms, plus on mount and turn completion), the client reads `subagentCatalog` and `subagentTiming` from `sessions.list`, matching `/#([^\s#]+)$/` to map each child back to its canvas node (`running` / `done` / `failed`) and latest `childId`.
+2. **Catalog & run-state telemetry tracking**: While a turn runs (every 700ms, plus on mount and turn completion), the client reads `subagentCatalog` and `subagentTiming` from `sessions.list`, matching `/#([^\s#]+)$/` to map each child back to its canvas node (`running` / `done` / `failed`) and latest `childId`, while also polling `<workspace>/.dsh/canvas/<sid>.run.json` for condition `decisions`, `pruned` nodes, `blockedEdges`, live retry counts (`loopCounts` / `nodeAttempts`), and `waitingLead`.
 3. **Lead `⏸ Ready` detection**: For non-entry Lead nodes, the client highlights **`⏸ Ready`** as soon as all upstream subagents are `done` and no downstream node has started yet.
 4. **Jump to live chat**: Clicking any subagent's bottom-left status pill (e.g. `Running ↗`, `Done ↗`) opens `dsh-resource://subagentchat/session/<childId>?parent=<sessionId>&mode=<mode>` via `sidebarRight.openResource(..., { kind: 'subagentchat', preferNewPane: true })`.
 

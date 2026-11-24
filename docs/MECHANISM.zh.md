@@ -57,14 +57,15 @@ flowchart LR
 调用 `canvas_workflow` 时，Host 的 `executePlan` 按以下流水线运行：
 
 1. **入口剥离与任务解析**：剥离作为总任务容器的入口节点 `lead`（永不作为子代理执行）。若调用时传入 `task` 参数，则覆盖入口 Lead 的总任务（方便直接复用空任务预设）。
-2. **成环校验（Kahn 拓扑排序）**：用 `orderNodes` 校验 DAG 无环（客户端手动画线时也会用 `wouldCycle` 即时拦截）。
-3. **可达性剪枝**：从入口 `lead` 做广度优先遍历，不可达的孤立节点在画布上显示为虚线，运行时被自动跳过并列入 `skipped`，不会消耗 Token。
-4. **事件驱动并发池、条件剪枝与断点续跑**：
+2. **成环校验与受控回环校验**：`orderNodes` 在**前向边（`!e.loop`）**上用 Kahn 拓扑排序保证主图无环；`validateLoopEdges` 单独校验受控回环边（`e.loop === true`），要求起点必为条件节点、目标必为严格前向祖先（非入口 Lead）且回环互不交叉。
+3. **可达性剪枝**：从入口 `lead` 沿前向边做广度优先遍历，不可达的孤立节点、空分工且无子代理上游的 Lead、以及悬空无出边的子代理在画布上显示为虚线，运行时自动跳过并列入 `skipped`，不会消耗 Token。
+4. **事件驱动并发池、条件剪枝、受控回环与断点续跑**：
    - 每个会话的运行进度保存在 `runBySession`，每次结束/熔断还会将快照存入 `lastRunBySession`；
    - 执行器维护一个**可调并发上限**（默认 4，可在 `⋯` 菜单或参数中调为 `1–8`）的**动态并发池（`inFlight` + `Promise.race`）**：
      - 只要有任意在跑子代理完成、空出并发槽位，**任何依赖已满足的下游子代理会立刻启动**，不再傻等同层较慢的兄弟节点；
      - 遇到**条件节点（`kind: "condition"`）**时，以轻量只读模式（`minimal`）+ 严格结构化 `outputSchema` 判断命中分支（支持默认 `if/else`、任意多路 `switch/case` 单选与 `multiMatch` 多选并行），随即阻断未命中出边并用祖先感知 BFS 剪枝未命中分支（包括防止上游 `session-ref` 侧线绕过条件）；若所有分支均未命中或条件节点自身失败，则绝不瞎猜分支，直接跳过中间分支转交最近下游 Lead（无下游 Lead 时熔断暂停）；
-     - 遇到**中间 Lead 节点**时暂停并返回 `status: "need-lead"`；遇到**末尾终审 Lead**（无剩余下游）时直接一步返回 `status: "done"` 与 `finalLead`，无需多余回调轮次；
+     - 遇到命中的**受控回环边（`loop: true, maxIterations: 1–10`）**时（`multiMatch` 下回环优先）：若未超单环上限与全局安全上限（`20` 次），精准重置 `descendants(入口) ∩ ancestors(条件)` 环内节点的运行状态（环外旁路不受影响），把打回理由注入回环入口（同时支持子代理与 `Lead` 节点），并在入口上一轮执行健康时自动复用其热子会话发送增量修正提示词（崩溃/空输出则丢弃旧会话重开）；若达到上限则熔断停止回跳，汇总 `1..N` 轮失败理由转交最近下游 Lead 拍板；
+     - 遇到**中间 Lead 节点**（支持 `Lead → Lead` 阶段串联）时暂停并返回 `status: "need-lead"`；遇到**末尾终审 Lead**（无剩余下游）时直接一步返回 `status: "done"` 与 `finalLead`，无需多余回调轮次；
    - 支持 **`retryFailed: true`** 或 **`fromNodes: [...]`** 局部重跑：自动复用上次已成功节点的缓存结果，仅重跑失败/目标节点及其下游；传 `reset: true` 则从头重跑。
 
 ```mermaid
@@ -118,7 +119,7 @@ sequenceDiagram
 ## 5. 实时状态胶囊与点击直达子会话
 
 1. **节点反查标记**：`spawnOnce` 启动子代理时，固定把 `spec.label` 设为 `<节点名>#<nodeId>`。
-2. **状态实时追踪**：客户端监听当前会话的运行态，在对话运行期间每 700ms（以及挂载与每轮结束时）读取 `sessions.list` 投影中的 `subagentCatalog` 与 `subagentTiming`，用末尾正则 `/#([^\s#]+)$/` 精准反查节点状态（`running` / `done` / `failed`）以及对应的 `childId`。
+2. **状态与遥测实时追踪**：客户端在对话运行期间每 700ms（以及挂载与每轮结束时）读取 `sessions.list` 投影中的 `subagentCatalog` 与 `subagentTiming`，用末尾正则 `/#([^\s#]+)$/` 精准反查子代理状态（`running` / `done` / `failed`）与 `childId`；同时轮询 Host 写入的 `<workspace>/.dsh/canvas/<sid>.run.json` 获取条件判决（`decisions`）、剪枝集（`pruned`）、阻断边（`blockedEdges`）、回环实时轮次（`loopCounts` / `nodeAttempts`）与待拍板状态（`waitingLead`）。
 3. **Lead「待拍板」自动高亮**：对于非入口 Lead 节点，客户端检测到其所有上游子代理均为 `done` 且下游尚未启动时，自动亮起蓝色 **`⏸ 待拍板`** 提示。
 4. **一键直达真实子对话**：点击任意子代理节点左下角状态胶囊（如 `进行中 ↗` / `已完成 ↗`），客户端调用 `sidebarRight.openResource('dsh-resource://subagentchat/session/<childId>?parent=<sessionId>&mode=<mode>', { kind: 'subagentchat', preferNewPane: true })`，直接在新侧边窗格打开该子代理的真实对话记录。
 

@@ -10,7 +10,7 @@ English | [中文](README.zh.md) | [Mechanism & Architecture](docs/MECHANISM.md)
 Turn multi-agent orchestration in DSH into a visual node graph: each card is an AI role, each wire defines who feeds whom, and pressing **● ON** lets you run the whole pipeline straight from chat.
 
 - **Real parallelism**: Independent nodes run concurrently (default 4, configurable 1–8 under `⋯`), and newly unblocked downstream nodes start the instant their inputs finish.
-- **Conditional branching**: Drop a **Condition** node anywhere to route downstream along `✓ Yes` or `✕ No` based on upstream results — the unchosen branch is skipped automatically without spawning.
+- **Conditional branching & controlled retry loops**: Drop a **Condition** node anywhere to route downstream (`✓ Yes` / `✕ No` or multi-way `switch/case`), or wire a branch back upstream (or right-click selected nodes → **`↺ Create loop`**) for bounded feedback-driven retries that circuit-break to Lead when exhausted.
 - **Human-in-the-loop**: Drop a **Lead** card anywhere in the flow to pause automatically for your decision before continuing.
 - **Zero black box**: Click any subagent card to open its live chat transcript and inspect its exact output.
 - **Don't want to draw by hand?** Describe the workflow in one sentence in chat — the agent sketches the graph for you and can patch it in place anytime.
@@ -78,14 +78,20 @@ Every subagent node can be configured independently:
 
 ---
 
-### 4. Conditional branching & dynamic pruning
+### 4. Conditional branching, dynamic pruning & retry loops
 
-Drop a **Condition** node anywhere in the graph to route downstream automatically based on upstream outputs:
+Drop a **Condition** node anywhere in the graph to route downstream automatically or loop back with feedback on failure:
 
 - Supports default binary **`Yes / No`**, multi-way **`switch/case`** via **`+ Case`** (e.g. `Pass / Minor Fix / Rewrite`), and **`Single / Multi`** match modes.
 - Unchosen branches are pruned automatically without spawning; if zero branches match or the condition node itself fails, it never guesses — it skips intermediate branches and hands off to the nearest downstream Lead.
 - Once judged, a compact verdict pill appears right under the condition card (click to inspect the full verdict reason), while unchosen branch edges and skipped nodes dim automatically.
+- **Controlled retry loops (`↺`)**:
+  - **Two ways to create**: Select one or more connected nodes → right-click **`↺ Create loop`** (auto-inserts a lightweight condition gate if the tail is a regular subagent), or drag a condition branch wire directly back to a strict ancestor node.
+  - **Clear visuals & free limit control**: Loop members get a color-coded outer dashed outline & `↺` badge (never clashing with running/done/failed borders), connected by an outer bypass rail; click the midpoint **`↺ ×3`** pill to adjust max retries (`1–10`) or remove the loop.
+  - **Feedback & circuit-break**: Retries reset only strict loop members (bypass nodes are never re-run), inject the condition's rejection reason while reusing healthy warm sessions, and circuit-break at max retries by handing all round summaries to the nearest downstream Lead.
 - **Per-node & global `+ Refs` list**: Click **`+ Refs`** in the top-right title bar of any node (Entry Lead global refs, downstream Leads, Subagents, or Condition nodes) to attach up to 16 reference file paths, URLs, or constraints — deduplicated and injected into prompts automatically at run time.
+
+![Controlled retry loop: Implement → Test & Verify → Checks Passed ↺ Auto-fix](docs/images/retry-loop-en.png)
 
 ![3-way switch/case conditional routing and automatic branch pruning](docs/images/condition-switch-run.gif)
 
@@ -134,7 +140,7 @@ Active nodes glow blue with animated flow wires and turn green when done. **Clic
 
 ## Presets, sharing & limits
 
-- **Presets & cross-session reuse**: Click `☰ Presets` to save the current canvas at the top of the menu (immediately available in any new chat), or load one of the 4 starter templates and **New blank canvas**. Custom presets live in browser storage — use `⋯ → ⇧ Copy JSON` and `⇩ Import` to share across devices.
+- **Presets & cross-session reuse**: Click `☰ Presets` to save the current canvas at the top of the menu (immediately available in any new chat), or load one of the 5 starter templates (including conditional branching & retry loop) and **New blank canvas**. Custom presets live in browser storage — use `⋯ → ⇧ Copy JSON` and `⇩ Import` to share across devices.
 - **Partial resume & concurrency**: If a mid-flow node fails, call `retryFailed: true` or `fromNodes` to reuse succeeded outputs and re-run only the failed segment and its downstream; adjust max concurrency (1 / 2 / 4 / 6 / 8, default 4) under `⋯`.
 - **How this differs from other canvas plugins**: Built for **multi-subagent orchestration + conditional routing + conversation Lead gates**; for `ctx.workflows` low-level tool pipelines, see [`@piedpiper911/dsh-workflow-canvas`](https://github.com/PiedPiper911/dsh-workflow-canvas).
 - **Limits**: Per-node `Scope` only narrows tools within the main chat's permission/sandbox ceiling.

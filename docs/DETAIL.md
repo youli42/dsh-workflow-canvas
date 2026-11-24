@@ -10,34 +10,48 @@ are performed by the conversation itself.
 - **Subagent node** (green top bar): spawns a child agent with its own
   `provider` / `model` / `reasoning effort` / capability scope (`standard` or
   `minimal`, bounded by the main chat permission mode). Optional **Memory** reuses
-  the node's child session; optional **Fallback** retries once on another model.
+  the node's child session (Latest or pinned past run); optional **Fallback**
+  retries once on another model.
 - **Lead node** (blue top bar): performed by the conversation, never spawned. The
   entry node carries the overall task; intermediate Lead nodes pause for your
-  decision, and a terminal Lead finishes in one shot without an extra callback.
+  decision; `Lead → Lead` stage chains are supported with zero subagent spawns
+  when `role` is filled; a terminal Lead finishes in one shot without an extra
+  callback.
 - **Condition node** (amber top bar): lightweight read-only (`minimal`) branch
   judge supporting inline-editable binary `if/else` (`Yes` / `No`), multi-way
   `switch/case` (`+ Case`), and `Single` / `Multi` match modes (including clean
   zero-match full skip when no branch applies). Unchosen paths are pruned
   automatically without spawning, and branches can converge back into a shared
   downstream node or terminal Lead.
-- **Typed outputs, universal input**: right-side output sockets pick the channel
+- **Controlled retry loops (`↺`)**: wire a condition branch back to a strict
+  ancestor (or select connected nodes and right-click **`↺ Create loop`**,
+  auto-inserting a condition gate if the tail is a subagent). Loop members get a
+  color-coded outer dashed outline and outer bypass rail with a clickable `↺ ×N`
+  pill (`1–10` retries), resetting only loop members on retry, injecting failure
+  feedback with healthy warm-session reuse, and circuit-breaking to the nearest
+  Lead when exhausted.
+- **Global & per-node `+ Refs`**: every node's top-right title bar supports up to
+  16 reference paths, URLs, or rules automatically deduplicated and injected at
+  run time.
+- **Typed outputs, universal input**: output sockets pick the channel
   (`prompt` / `structured` / `session` / condition branch); every non-entry node
-  exposes a single universal left input (`in`) that accepts any wire and inherits
-  the source colour. Cycles are blocked immediately; drag a connected input away
-  to detach its latest wire.
-- Inactive nodes (unreachable from entry, solo chained Leads with no subagent
-  upstream, or dangling dead-end subagents) are drawn dashed and skipped at run time.
-- Wheel zooms around the cursor; middle-drag (or `Space` + drag) pans; `⊡ Fit`
-  fits all nodes into the visible viewport; the percentage button resets to 100%
-  on the Lead.
-- Marquee selection: drag on empty canvas to select multiple nodes; dragging any
-  selected node moves the whole selection.
-- Right-drag across links cuts them on release; the swept path and links about to
-  be cut highlight in red (toggle under `⋯`).
-- Shortcuts: `Shift+A` opens the Add Node menu at the cursor,
-  `Ctrl+D` duplicates selected nodes, `Delete` removes selected nodes, `Ctrl+Z`
-  undoes, and `Esc` closes popups. `⋯` also provides `⊞ Auto layout`,
-  `⇧ Copy JSON`, and `Visual effects` (`Minimal` / `Standard` / `Vivid`).
+  exposes a single universal input (`in`) that accepts any wire and inherits the
+  source colour. Arbitrary cycles are blocked immediately; drag a connected input
+  away to detach its latest forward wire.
+- Inactive nodes (unreachable from entry, blank-role solo chained Leads with no
+  subagent upstream, or dangling dead-end subagents) are drawn dashed and skipped
+  at run time.
+- **Horizontal / vertical layout & slim narrow-sidebar UI**: toggle `⇄ Horiz` /
+  `⇅ Vert` (top-in / bottom-out curves + condition `Out R / Out L`); right-click
+  any node, edge, or blank canvas for context actions (insert on wire, create
+  loop, duplicate/delete, layout, undo/redo) without conflicting with right-drag
+  wire cutting (`>= 6px`). Bottom-right floating `⊡ | 100%` pill handles fit and
+  scrub zoom.
+- **Multi-select & customizable shortcuts**: marquee drag or `Shift`/`Ctrl`+click
+  to multi-select; `Shift+A` adds at cursor, `Shift+D` duplicates selected nodes
+  together with internal wires, `Delete` removes selected, `Ctrl+Z` /
+  `Ctrl+Shift+Z` (`Ctrl+Y`) undo/redo, and `Esc` closes popups. Customize bindings
+  under `⋯ → ⌨ Shortcuts`.
 - Click any subagent node's status pill (e.g. `Done ↗`) to jump straight to its
   live subagent chat pane.
 
@@ -76,8 +90,9 @@ if the Host refuses, the record is dropped and the node starts fresh.
 
 - Saved presets live in browser storage and do not auto-sync between the Desktop
   app and `dsh web`, nor across machines (use `⋯ → ⇧ Copy JSON` and `⇩ Import`
-  to share or migrate them; starter templates are built in under `☰ Presets`).
-- Lead steps have no tracked state; they show **Runs in chat** (or **Ready** once all upstream subagents finish).
-- Up to 4 nodes run at a time.
+  to share or migrate them; 5 starter templates including conditional branching &
+  retry loop are built in under `☰ Presets`).
+- Lead steps have no child session; they show **Runs in chat** (or **Ready** once upstream finishes).
+- Concurrency defaults to 4 (configurable 1–8 under `⋯`); controlled loops allow up to 1–10 retries per loop (20 global safety cap).
 
 For architecture diagrams and runtime internals, see [MECHANISM.md](MECHANISM.md) ([中文](MECHANISM.zh.md)).

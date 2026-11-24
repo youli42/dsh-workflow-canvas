@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { apply, orderNodes, upstreamOf, downstreamLabels, briefFor, parseConditionDecision, withoutEntry, analyzeCanvasWarnings, normalizeCanvas, applyPatch, inspectPlan, sessionIdFromContext, buildActiveCanvasContext, isPermissionFailure, executePlan } from '../index.js';
+import { apply, orderNodes, upstreamOf, downstreamLabels, briefFor, parseConditionDecision, withoutEntry, analyzeCanvasWarnings, normalizeCanvas, applyPatch, inspectPlan, sessionIdFromContext, buildActiveCanvasContext, isPermissionFailure, loopMemberIds, validateLoopEdges, executePlan } from '../index.js';
 
 test('withoutEntry strips the entry Lead', () => {
   const nodes = [
@@ -1569,4 +1569,232 @@ test('Lead -> Lead stage chains execute with zero subagents and pass leadResult 
   assert.equal(m2.status, 'done');
   assert.deepEqual(spawned, ['impl']);
   assert.ok(briefs.impl.includes('仅保留深浅双色，不做自定义配色'));
+});
+
+test('controlled loop retries with feedback & warm session reuse, isolates bypass nodes, and exits on pass', async () => {
+  const calls = [];
+  let codeRound = 0;
+  let checkRound = 0;
+  const scope = {
+    subagents: {
+      startActivation(spec) {
+        const id = spec.label.split('#')[1];
+        const prompt = (spec.prompt && spec.prompt[0] && spec.prompt[0].text) || '';
+        calls.push({ id, childId: spec.childId || null, prompt });
+        if (id === 'code') {
+          codeRound += 1;
+          return Promise.resolve({
+            childId: spec.childId || ('kid-code-' + codeRound),
+            result: Promise.resolve({ output: [{ type: 'text', text: 'code-v' + codeRound }], stopReason: 'completed' }),
+            dispose: () => Promise.resolve(),
+          });
+        }
+        if (id === 'check') {
+          checkRound += 1;
+          const decision = checkRound === 1
+            ? { pass: false, reason: 'auth.js 缺少空值校验' }
+            : { pass: true, reason: '所有单测通过' };
+          return Promise.resolve({
+            childId: 'kid-check-' + checkRound,
+            result: Promise.resolve({ structured: decision, output: [{ type: 'text', text: JSON.stringify(decision) }], stopReason: 'completed' }),
+            dispose: () => Promise.resolve(),
+          });
+        }
+        return Promise.resolve({
+          childId: 'kid-' + id,
+          result: Promise.resolve({ output: [{ type: 'text', text: 'ok:' + id }], stopReason: 'completed' }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+
+  const nodes = [
+    { id: 'lead', kind: 'lead', label: 'Lead' },
+    { id: 'code', kind: 'agent', label: '编写代码', role: '实现登录接口' },
+    { id: 'test', kind: 'agent', label: '跑单测', role: '执行测试套件' },
+    { id: 'check', kind: 'condition', label: '是否通过？', role: '全部通过走是，否则走否' },
+    { id: 'docs', kind: 'agent', label: '旁路文档', role: '补充说明文档' },
+    { id: 'ship', kind: 'agent', label: '交付汇总', role: '整理发布清单' },
+  ];
+  const edges = [
+    { from: 'lead', to: 'code', type: 'prompt' },
+    { from: 'lead', to: 'docs', type: 'prompt' },
+    { from: 'code', to: 'test', type: 'prompt' },
+    { from: 'test', to: 'check', type: 'prompt' },
+    { from: 'check', to: 'ship', type: 'prompt', branch: 'true' },
+    { from: 'check', to: 'code', type: 'prompt', branch: 'false', loop: true, maxIterations: 3 },
+    { from: 'docs', to: 'ship', type: 'prompt' },
+  ];
+  assert.deepEqual(validateLoopEdges(nodes, edges), []);
+  assert.deepEqual(Array.from(loopMemberIds(nodes, edges, edges[5])).sort(), ['check', 'code', 'test']);
+
+  const plan = { task: '上线登录功能', nodes: withoutEntry(nodes), edges };
+  const res = await executePlan(scope, plan, {}, { agent: { id: 's-loop-pass-' + Date.now() }, signal: new AbortController().signal });
+  assert.equal(res.status, 'done');
+  assert.equal(res.loopExhausted, undefined);
+  assert.equal(calls.filter((c) => c.id === 'docs').length, 1, 'bypass node outside loop runs only once');
+  assert.equal(calls.filter((c) => c.id === 'ship').length, 1, 'downstream ship runs once after loop exits');
+  const codeCalls = calls.filter((c) => c.id === 'code');
+  assert.equal(codeCalls.length, 2, 'code ran initial + 1 retry');
+  assert.equal(codeCalls[0].childId, null);
+  assert.equal(codeCalls[1].childId, 'kid-code-1', 'retry reuses healthy warm session');
+  assert.ok(codeCalls[1].prompt.includes('auth.js 缺少空值校验'), 'retry prompt carries condition feedback');
+  assert.ok(codeCalls[1].prompt.includes('1/3'), 'retry prompt carries round ratio');
+});
+
+test('loop exhaustion stops at maxIterations, drops crashed warm session, and hands off history to Lead', async () => {
+  const calls = [];
+  let codeRound = 0;
+  let checkRound = 0;
+  const scope = {
+    subagents: {
+      startActivation(spec) {
+        const id = spec.label.split('#')[1];
+        const prompt = (spec.prompt && spec.prompt[0] && spec.prompt[0].text) || '';
+        calls.push({ id, childId: spec.childId || null, prompt });
+        if (id === 'code') {
+          codeRound += 1;
+          // Round 1 crashes so round 2 must NOT reuse its crashed child session
+          const crashed = codeRound === 1;
+          return Promise.resolve({
+            childId: 'kid-c-' + codeRound,
+            result: Promise.resolve({ output: [{ type: 'text', text: crashed ? 'boom' : 'attempt-' + codeRound }], stopReason: crashed ? 'error' : 'completed' }),
+            dispose: () => Promise.resolve(),
+          });
+        }
+        checkRound += 1;
+        const dec = { pass: false, reason: '失败原因#' + checkRound };
+        return Promise.resolve({
+          childId: 'kid-j-' + checkRound,
+          result: Promise.resolve({ structured: dec, output: [{ type: 'text', text: JSON.stringify(dec) }], stopReason: 'completed' }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+  const nodes = [
+    { id: 'lead', kind: 'lead', label: 'Lead' },
+    { id: 'code', kind: 'agent', label: '实现', role: '写代码' },
+    { id: 'check', kind: 'condition', label: '验收？', role: '是否通过' },
+    { id: 'final', kind: 'lead', label: '终审拍板', role: '决定如何收尾' },
+  ];
+  const edges = [
+    { from: 'lead', to: 'code', type: 'prompt' },
+    { from: 'code', to: 'check', type: 'prompt' },
+    { from: 'check', to: 'final', type: 'prompt', branch: 'true' },
+    { from: 'check', to: 'code', type: 'prompt', branch: 'false', loop: true, maxIterations: 2 },
+  ];
+  const plan = { task: '修 bug', nodes: withoutEntry(nodes), edges };
+  const res = await executePlan(scope, plan, {}, { agent: { id: 's-loop-ex-' + Date.now() }, signal: new AbortController().signal });
+  assert.equal(res.status, 'done');
+  assert.equal(res.finalLead.label, '终审拍板');
+  const codeCalls = calls.filter((c) => c.id === 'code');
+  assert.equal(codeCalls.length, 3, 'initial + 2 retries = 3 total runs, never spawns a 4th');
+  assert.equal(codeCalls[1].childId, null, 'crashed round 1 session is NOT reused');
+  assert.equal(codeCalls[2].childId, 'kid-c-2', 'healthy round 2 session IS reused on round 3');
+  assert.equal(res.loopExhausted.length, 1);
+  assert.equal(res.loopExhausted[0].iterations, 2);
+  assert.equal(res.loopExhausted[0].history.length, 3);
+  assert.ok(res.hint.includes('失败原因#1') && res.hint.includes('失败原因#3'), 'Lead hint summarizes every failed round');
+});
+
+test('loop targeting a Lead passes loopFeedback via need-lead and crossing loops are rejected', async () => {
+  let judgeCount = 0;
+  const scope = {
+    subagents: {
+      startActivation() {
+        judgeCount += 1;
+        const dec = judgeCount === 1
+          ? { pass: false, reason: '方案缺少回滚步骤' }
+          : { pass: true, reason: '方案完整' };
+        return Promise.resolve({
+          childId: 'kid-jl-' + judgeCount,
+          result: Promise.resolve({ structured: dec, output: [{ type: 'text', text: JSON.stringify(dec) }], stopReason: 'completed' }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+  const nodes = [
+    { id: 'lead', kind: 'lead', label: 'Lead' },
+    { id: 'draft', kind: 'lead', label: '主对话起草', role: '撰写迁移方案' },
+    { id: 'judge', kind: 'condition', label: '方案完备？', role: '检查是否含回滚步骤' },
+    { id: 'end', kind: 'lead', label: '最终确认', role: '批准发布' },
+  ];
+  const edges = [
+    { from: 'lead', to: 'draft', type: 'prompt' },
+    { from: 'draft', to: 'judge', type: 'prompt' },
+    { from: 'judge', to: 'end', type: 'prompt', branch: 'true' },
+    { from: 'judge', to: 'draft', type: 'prompt', branch: 'false', loop: true, maxIterations: 2 },
+  ];
+  const plan = { task: '数据库迁移', nodes: withoutEntry(nodes), edges };
+  const sid = 's-loop-lead-' + Date.now();
+  const r1 = await executePlan(scope, plan, {}, { agent: { id: sid }, signal: new AbortController().signal });
+  assert.equal(r1.status, 'need-lead');
+  assert.equal(r1.node.label, '主对话起草');
+  assert.equal(r1.node.loopFeedback, undefined);
+
+  const r2 = await executePlan(scope, plan, { leadResult: '初版方案（无回滚）' }, { agent: { id: sid }, signal: new AbortController().signal });
+  assert.equal(r2.status, 'need-lead');
+  assert.equal(r2.node.label, '主对话起草');
+  assert.equal(r2.node.loopFeedback.retry, 1);
+  assert.equal(r2.node.loopFeedback.reason, '方案缺少回滚步骤');
+  assert.ok(r2.hint.includes('方案缺少回滚步骤'));
+
+  const r3 = await executePlan(scope, plan, { leadResult: '修订方案（含回滚）' }, { agent: { id: sid }, signal: new AbortController().signal });
+  assert.equal(r3.status, 'done');
+  assert.equal(r3.finalLead.label, '最终确认');
+
+  // Crossing loops are rejected by validateLoopEdges & normalizeCanvas/applyPatch preserve loop metadata
+  const crossNodes = [
+    { id: 'a', kind: 'agent' },
+    { id: 'b', kind: 'agent' },
+    { id: 'c1', kind: 'condition' },
+    { id: 'c2', kind: 'condition' },
+  ];
+  const crossEdges = [
+    { from: 'lead', to: 'a' },
+    { from: 'a', to: 'b' },
+    { from: 'b', to: 'c1' },
+    { from: 'c1', to: 'c2' },
+    { from: 'c1', to: 'a', branch: 'false', loop: true, maxIterations: 2 },
+    { from: 'c2', to: 'b', branch: 'false', loop: true, maxIterations: 2 },
+  ];
+  assert.ok(validateLoopEdges(crossNodes, crossEdges).some((e) => e.includes('交叉')));
+
+  const gen = normalizeCanvas({
+    task: 't',
+    nodes: [{ ref: 'a', label: 'A' }, { ref: 'c', kind: 'condition', label: 'C' }],
+    edges: [
+      { from: 'lead', to: 'a' },
+      { from: 'a', to: 'c' },
+      { from: 'c', to: 'a', branch: 'false', loop: true, maxIterations: 5 },
+    ],
+  });
+  const le = gen.edges.find((e) => e.loop);
+  assert.ok(le && le.maxIterations === 5);
+  const patched = applyPatch({ task: 't', nodes: withoutEntry(gen.nodes), edges: gen.edges }, {
+    edges: [{ from: le.from, to: le.to, branch: 'false', loop: true, maxIterations: 7 }],
+  });
+  assert.equal(patched.plan.edges.find((e) => e.loop).maxIterations, 7);
+
+  // Mid-loop bypass leak warning
+  const leakNodes = [
+    { id: 'lead', kind: 'lead', label: 'Lead' },
+    { id: 'a', kind: 'agent', label: '编码' },
+    { id: 'b', kind: 'condition', label: '验收' },
+    { id: 'side', kind: 'agent', label: '旁路' },
+    { id: 'end', kind: 'lead', label: '终审', role: '汇总' },
+  ];
+  const leakEdges = [
+    { from: 'lead', to: 'a' },
+    { from: 'a', to: 'b' },
+    { from: 'a', to: 'side' },
+    { from: 'side', to: 'end' },
+    { from: 'b', to: 'end', branch: 'true' },
+    { from: 'b', to: 'a', branch: 'false', loop: true, maxIterations: 2 },
+  ];
+  const leakWarns = analyzeCanvasWarnings(leakNodes, leakEdges);
+  assert.ok(leakWarns.some((w) => w.includes('绕过条件裁判的旁路连线') && w.includes('编码 → 旁路')));
 });

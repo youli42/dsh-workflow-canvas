@@ -526,3 +526,88 @@ test('nextSelectionOnNodeClick supports Shift/Ctrl additive toggle and normal si
   assert.deepEqual([...s4.next], ['c']);
   assert.equal(s4.toggledOff, false);
 });
+
+test('controlled loop helpers: membership, validation, multi-select analysis, bypass arc, buildPlan & cloneSelection', () => {
+  const nodes = [
+    { id: 'lead', kind: 'lead', task: 't', x: 0, y: 100 },
+    { id: 'a', kind: 'agent', label: 'A', x: 300, y: 100 },
+    { id: 'b', kind: 'agent', label: 'B', x: 600, y: 100 },
+    { id: 'c', kind: 'condition', label: 'C', x: 900, y: 100 },
+    { id: 'bypass', kind: 'agent', label: 'Bypass', x: 300, y: 400 },
+  ];
+  const fwdEdges = [
+    { id: 'e0', from: 'lead', to: 'a', type: 'prompt' },
+    { id: 'e1', from: 'a', to: 'b', type: 'prompt' },
+    { id: 'e2', from: 'b', to: 'c', type: 'prompt' },
+    { id: 'e3', from: 'lead', to: 'bypass', type: 'prompt' },
+  ];
+
+  // canLinkAsLoop allows condition -> strict ancestor, blocks non-condition / entry Lead / non-ancestor
+  assert.equal(client.canLinkAsLoop(nodes, fwdEdges, 'c', 'a').ok, true);
+  assert.equal(client.canLinkAsLoop(nodes, fwdEdges, 'b', 'a').ok, false);
+  assert.equal(client.canLinkAsLoop(nodes, fwdEdges, 'c', 'lead').ok, false);
+  assert.equal(client.canLinkAsLoop(nodes, fwdEdges, 'c', 'bypass').ok, false);
+
+  // analyzeLoopSelection: single subagent auto-inserts condition; multi-select ending in condition reuses it
+  const singleAgent = client.analyzeLoopSelection(nodes, fwdEdges, ['a']);
+  assert.equal(singleAgent.ok, true);
+  assert.equal(singleAgent.needsAutoCondition, true);
+  assert.equal(client.analyzeLoopSelection(nodes, fwdEdges, ['c']).ok, false);
+
+  const twoAgents = client.analyzeLoopSelection(nodes, fwdEdges, ['a', 'b']);
+  assert.equal(twoAgents.ok, true);
+  assert.equal(twoAgents.entryId, 'a');
+  assert.equal(twoAgents.exitId, 'b');
+  assert.equal(twoAgents.needsAutoCondition, true);
+
+  const withCond = client.analyzeLoopSelection(nodes, fwdEdges, ['a', 'b', 'c']);
+  assert.equal(withCond.ok, true);
+  assert.equal(withCond.entryId, 'a');
+  assert.equal(withCond.exitId, 'c');
+  assert.equal(withCond.needsAutoCondition, false);
+
+  // Disconnected selection rejected
+  assert.equal(client.analyzeLoopSelection(nodes, fwdEdges, ['a', 'bypass']).ok, false);
+
+  // With loop edge added: membership excludes bypass, crossing loop is rejected, bypass arc clears cards
+  const loopEdge = { id: 'el', from: 'c', to: 'a', type: 'prompt', branch: 'false', loop: true, maxIterations: 4 };
+  const allEdges = fwdEdges.concat([loopEdge]);
+  assert.deepEqual(Array.from(client.loopMemberIdsUI(nodes, allEdges, loopEdge)).sort(), ['a', 'b', 'c']);
+  assert.equal(client.canLinkAsLoop(nodes, allEdges, 'c', 'b').reason, 'loopOverlap');
+  assert.ok(client.topoOrder(nodes, allEdges), 'topoOrder ignores controlled loop back-edges');
+
+  const arcLR = client.loopEdgeArc(nodes[3], nodes[1], loopEdge, 'lr', nodes, allEdges);
+  assert.ok(arcLR.midY < nodes[1].y + 2000, 'horizontal loop bypass rail routes above loop cards');
+  assert.ok(client.distanceToEdge({ x: arcLR.midX, y: arcLR.midY }, nodes[3], nodes[1], loopEdge, 'lr', nodes, allEdges) <= 1);
+
+  const arcTB = client.loopEdgeArc(nodes[3], nodes[1], loopEdge, 'tb', nodes, allEdges);
+  assert.ok(arcTB.midX > nodes[3].x + 2000 + 216, 'vertical loop bypass rail routes outside loop cards');
+
+  const built = client.buildPlan(nodes, allEdges);
+  assert.ok(!built.error);
+  const builtLoop = built.plan.edges.find((e) => e.loop);
+  assert.ok(builtLoop && builtLoop.maxIterations === 4);
+
+  // cloneSelection preserves loop metadata when duplicating the whole loop block
+  const { clonedEdges } = client.cloneSelection(nodes, allEdges, ['a', 'b', 'c'], 'lp1');
+  const clonedLoop = clonedEdges.find((e) => e.loop);
+  assert.ok(clonedLoop && clonedLoop.maxIterations === 4 && clonedLoop.branch === 'false');
+
+  // Breaking an internal forward edge prunes the now-invalid loop edge cleanly
+  const brokenEdges = allEdges.filter((e) => e.id !== 'e1');
+  const pruned = client.pruneInvalidLoopEdges(nodes, brokenEdges);
+  assert.equal(pruned.removedCount, 1);
+  assert.equal(pruned.edges.some((e) => e.loop), false);
+  const builtBroken = client.buildPlan(nodes, brokenEdges);
+  assert.ok(!builtBroken.error);
+  assert.equal(builtBroken.plan.edges.some((e) => e.loop), false, 'buildPlan strips broken loop edges');
+
+  // Built-in retry loop starter template is valid in both zh and en
+  for (const lang of ['zh', 'en']) {
+    const loopTpl = client.builtinTemplates(lang).find((t) => t.id === 'tpl-loop');
+    assert.ok(loopTpl, 'includes retry loop template in ' + lang);
+    const le = loopTpl.edges.find((e) => e.loop === true);
+    assert.ok(le && le.maxIterations === 3 && le.branch === 'false');
+    assert.equal(client.loopMemberIdsUI(loopTpl.nodes, loopTpl.edges, le).size, 3);
+  }
+});

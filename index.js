@@ -90,10 +90,66 @@ function parsePayload(rawInput) {
   }
 }
 
-/** Kahn topological order over every plan node. */
+const MAX_LOOP_ITERATIONS = 10;
+const DEFAULT_LOOP_ITERATIONS = 3;
+const MAX_GLOBAL_LOOPS = 20;
+
+function normalizeMaxIterations(val) {
+  const n = Number(val);
+  if (!Number.isFinite(n)) return DEFAULT_LOOP_ITERATIONS;
+  return Math.max(1, Math.min(MAX_LOOP_ITERATIONS, Math.floor(n)));
+}
+
+function isLoopEdge(e) {
+  return Boolean(e && e.loop === true);
+}
+
+function forwardEdgesOf(edges) {
+  return (Array.isArray(edges) ? edges : []).filter((e) => e && !e.loop);
+}
+
+/**
+ * Compute the set of node ids strictly inside a controlled loop edge (from target -> ... -> source)
+ * over forward edges: `descendants(loopEdge.to) ∩ ancestors(loopEdge.from)` (inclusive).
+ * Returns an empty Set if `loopEdge.from` is not reachable from `loopEdge.to` over forward edges.
+ */
+function loopMemberIds(nodes, edges, loopEdge) {
+  if (!loopEdge || !loopEdge.from || !loopEdge.to || loopEdge.to === 'lead') return new Set();
+  const fwd = new Map();
+  const rev = new Map();
+  for (const e of forwardEdgesOf(edges)) {
+    if (!e.from || !e.to) continue;
+    if (!fwd.has(e.from)) fwd.set(e.from, []);
+    fwd.get(e.from).push(e.to);
+    if (!rev.has(e.to)) rev.set(e.to, []);
+    rev.get(e.to).push(e.from);
+  }
+  const desc = new Set([loopEdge.to]);
+  const q1 = [loopEdge.to];
+  for (let i = 0; i < q1.length; i += 1) {
+    for (const next of fwd.get(q1[i]) || []) {
+      if (!desc.has(next)) { desc.add(next); q1.push(next); }
+    }
+  }
+  if (!desc.has(loopEdge.from)) return new Set();
+  const anc = new Set([loopEdge.from]);
+  const q2 = [loopEdge.from];
+  for (let i = 0; i < q2.length; i += 1) {
+    for (const prev of rev.get(q2[i]) || []) {
+      if (!anc.has(prev)) { anc.add(prev); q2.push(prev); }
+    }
+  }
+  const members = new Set();
+  for (const id of desc) {
+    if (anc.has(id)) members.add(id);
+  }
+  return members;
+}
+
+/** Kahn topological order over every plan node (ignoring controlled loop back-edges). */
 function orderNodes(plan) {
   const nodes = plan.nodes || [];
-  const edges = plan.edges || [];
+  const edges = forwardEdgesOf(plan.edges || []);
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const indeg = new Map(nodes.map((n) => [n.id, 0]));
   const adj = new Map(nodes.map((n) => [n.id, []]));
@@ -118,7 +174,7 @@ function orderNodes(plan) {
 
 function upstreamOf(plan, node) {
   const byId = new Map((plan.nodes || []).map((n) => [n.id, n]));
-  return (plan.edges || [])
+  return forwardEdgesOf(plan.edges || [])
     .filter((e) => e.to === node.id)
     .map((e) => ({ edge: e, from: byId.get(e.from) }))
     .filter((x) => x.from);
@@ -126,7 +182,7 @@ function upstreamOf(plan, node) {
 
 function downstreamLabels(plan, node) {
   const byId = new Map((plan.nodes || []).map((n) => [n.id, n]));
-  return (plan.edges || [])
+  return forwardEdgesOf(plan.edges || [])
     .filter((e) => e.from === node.id)
     .map((e) => (byId.get(e.to) || {}).label)
     .filter(Boolean);
@@ -312,7 +368,7 @@ function parseConditionDecision(result, fallbackText, nodeOrBranches) {
   return makeDecision(matched, raw.slice(0, 200) || (matched.length ? '' : '未命中任何分支，已跳过后续分支'));
 }
 
-function briefFor(plan, node, results, failedMap, prunedSet) {
+function briefFor(plan, node, results, failedMap, prunedSet, loopCtx) {
   const ups = upstreamOf(plan, node).filter((u) => !(prunedSet && prunedSet.has(u.from.id)));
   const downs = downstreamLabels(plan, node);
   const head = [];
@@ -320,11 +376,15 @@ function briefFor(plan, node, results, failedMap, prunedSet) {
     const outEdges = (plan.edges || []).filter((e) => e.from === node.id);
     const byId = new Map((plan.nodes || []).map((n) => [n.id, n]));
     const { branches, isDefaultBinary, multiMatch } = conditionBranches(node);
+    const fmtTarget = (e) => {
+      const lbl = (byId.get(e.to) || {}).label || e.to;
+      return e.loop ? (lbl + '（↺ 回环重做，最多 ' + normalizeMaxIterations(e.maxIterations) + ' 次）') : lbl;
+    };
     head.push('【工作流条件判断节点】你负责判断当前工作流接下来走哪条分支（「' + node.label + '」）。');
     head.push('【总任务】' + plan.task);
     if (isDefaultBinary) {
-      const yesTargets = outEdges.filter((e) => (normalizeBranch(e.branch) || 'true') === 'true').map((e) => (byId.get(e.to) || {}).label || e.to);
-      const noTargets = outEdges.filter((e) => normalizeBranch(e.branch) === 'false').map((e) => (byId.get(e.to) || {}).label || e.to);
+      const yesTargets = outEdges.filter((e) => (normalizeBranch(e.branch) || 'true') === 'true').map(fmtTarget);
+      const noTargets = outEdges.filter((e) => normalizeBranch(e.branch) === 'false').map(fmtTarget);
       head.push('【判断条件】' + (node.role || '判断上游步骤是否执行成功并达到预期；成功返回 true，失败或未达标返回 false。'));
       head.push('【分支去向】pass=true（是）→ ' + (yesTargets.join('、') || '（无）') + '；pass=false（否）→ ' + (noTargets.join('、') || '（无）'));
       head.push('【要求】严格依据上游实际输出（含成功/失败状态与【未完全交付】标记）做出客观判断，只返回 JSON 对象 {"pass": true/false, "reason": "一句话理由"}。');
@@ -335,7 +395,7 @@ function briefFor(plan, node, results, failedMap, prunedSet) {
             const eb = normalizeBranch(e.branch);
             return eb ? eb === b.id : idx === 0;
           })
-          .map((e) => (byId.get(e.to) || {}).label || e.to);
+          .map(fmtTarget);
         const tag = b.label === b.id ? '"' + b.id + '"' : '"' + b.id + '"（' + b.label + '）';
         return '- ' + tag + ' → ' + (targets.join('、') || '（无下游）');
       });
@@ -363,6 +423,15 @@ function briefFor(plan, node, results, failedMap, prunedSet) {
   }
   if (mergedRefs.length) {
     head.push('【参考资料 / 约束】\n' + mergedRefs.map((r) => '- ' + r).join('\n'));
+  }
+  if (loopCtx && loopCtx.feedback) {
+    const fb = loopCtx.feedback;
+    const lines = [
+      '【第 ' + fb.retry + '/' + fb.max + ' 次回环修正反馈】下游条件节点「' + (fb.sourceLabel || '条件判断') + '」判定上一轮未通过，请针对以下问题修正后输出最新结果：',
+      '- 打回理由：' + (fb.reason || '未达预期'),
+    ];
+    if (fb.lastSummary) lines.push('- 上一轮环内参考摘要：\n' + fb.lastSummary);
+    head.push(lines.join('\n'));
   }
   let text = head.join('\n') + '\n';
   for (const u of ups) {
@@ -412,13 +481,29 @@ function isEmptyOutput(result) {
   return text.trim().length === 0;
 }
 
-async function spawnOnce(scope, plan, node, results, parent, signal, route, forcedChild, sid, failedMap, prunedSet) {
+function buildLoopWarmPrompt(node, loopCtx) {
+  const fb = loopCtx && loopCtx.feedback;
+  if (!fb) return null;
+  const lines = [
+    '【第 ' + fb.retry + '/' + fb.max + ' 次回环修正】下游条件节点「' + (fb.sourceLabel || '条件判断') + '」判定上一轮未通过，请结合以下反馈直接在当前会话上下文中修正并输出最新交付结果（无需重复叙述过程）：',
+    '- 打回理由：' + (fb.reason || '未达预期'),
+  ];
+  if (fb.lastSummary) lines.push('- 上一轮环内参考摘要：\n' + fb.lastSummary);
+  if (node.role) lines.push('- 你的职责提醒：' + node.role);
+  return lines.join('\n');
+}
+
+async function spawnOnce(scope, plan, node, results, parent, signal, route, forcedChild, sid, failedMap, prunedSet, loopCtx) {
   const childKey = (id) => String(sid || '') + '::' + id;
   const isCondition = node.kind === 'condition';
+  const fullBrief = briefFor(plan, node, results, failedMap, prunedSet, loopCtx);
+  const warmPrompt = (!isCondition && loopCtx && loopCtx.warmChildId && loopCtx.feedback)
+    ? buildLoopWarmPrompt(node, loopCtx)
+    : null;
   const spec = {
     provider: 'spawn',
     label: node.label + '#' + node.id,
-    prompt: [{ type: 'text', text: briefFor(plan, node, results, failedMap, prunedSet) }],
+    prompt: [{ type: 'text', text: fullBrief }],
     parent,
     signal,
     delivery: 'caller',
@@ -471,8 +556,11 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
     }
   }
 
-  const run = async (childId) => {
-    const withChild = childId ? { ...spec, childId } : spec;
+  const run = async (childId, overridePrompt) => {
+    const baseSpec = overridePrompt
+      ? { ...spec, prompt: [{ type: 'text', text: overridePrompt }] }
+      : spec;
+    const withChild = childId ? { ...baseSpec, childId } : baseSpec;
     let activation;
     try {
       activation = await scope.subagents.startActivation(withChild);
@@ -510,6 +598,20 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
       try { await activation.dispose(); } catch (_e) { /* ignore */ }
     }
   };
+
+  // On a controlled loop retry where the previous run of this node was healthy,
+  // resume its warm child session with a concise incremental correction prompt.
+  if (warmPrompt && loopCtx && loopCtx.warmChildId && !forcedChild) {
+    const continued = await run(loopCtx.warmChildId, warmPrompt);
+    if (continued.ok) {
+      liveChild.set(childKey(node.id), continued.childId || loopCtx.warmChildId);
+      return continued;
+    }
+    if (continued.reason !== 'activation-failed') {
+      return continued;
+    }
+    /* warm session refused: fall through to a fresh session with the full brief + feedback */
+  }
 
   // A `session` edge means "continue the upstream node's conversation": run this
   // step inside that child session instead of starting a fresh one.
@@ -552,15 +654,15 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
   return started;
 }
 
-async function spawnNode(scope, plan, node, results, parent, signal, sid, failedMap, prunedSet) {
-  const continueFrom = (plan.edges || [])
+async function spawnNode(scope, plan, node, results, parent, signal, sid, failedMap, prunedSet, loopCtx) {
+  const continueFrom = forwardEdgesOf(plan.edges || [])
     .filter((e) => e.to === node.id && e.type === 'session-ref' && !(prunedSet && prunedSet.has(e.from)))
     .map((e) => liveChild.get(String(sid || '') + '::' + e.from)
       || childByNode.get(String(sid || '') + '::' + e.from))
     .find((id) => typeof id === 'string');
 
   if (continueFrom) {
-    const continued = await spawnOnce(scope, plan, node, results, parent, signal, undefined, continueFrom, sid, failedMap, prunedSet);
+    const continued = await spawnOnce(scope, plan, node, results, parent, signal, undefined, continueFrom, sid, failedMap, prunedSet, loopCtx);
     if (continued.ok) {
       const out = { ok: true, empty: Boolean(continued.empty), text: continued.text + '\n（已在上游会话中继续）', childId: continued.childId || continueFrom };
       if (continued.decision) out.decision = continued.decision;
@@ -568,7 +670,7 @@ async function spawnNode(scope, plan, node, results, parent, signal, sid, failed
     }
   }
 
-  const first = await spawnOnce(scope, plan, node, results, parent, signal, undefined, undefined, sid, failedMap, prunedSet);
+  const first = await spawnOnce(scope, plan, node, results, parent, signal, undefined, undefined, sid, failedMap, prunedSet, loopCtx);
   if (first.ok) {
     const out = { ok: true, empty: Boolean(first.empty), text: first.text, childId: first.childId || '' };
     if (first.decision) out.decision = first.decision;
@@ -581,7 +683,7 @@ async function spawnNode(scope, plan, node, results, parent, signal, sid, failed
   const retry = await spawnOnce(scope, plan, node, results, parent, signal, {
     provider: node.fallbackProvider,
     model: node.fallbackModel,
-  }, undefined, sid, failedMap, prunedSet);
+  }, undefined, sid, failedMap, prunedSet, loopCtx);
   if (retry.ok) {
     const out = { ok: true, empty: Boolean(retry.empty), text: retry.text + '\n（已用备用模型重试成功）', childId: retry.childId || '' };
     if (retry.decision) out.decision = retry.decision;
@@ -591,10 +693,10 @@ async function spawnNode(scope, plan, node, results, parent, signal, sid, failed
   return { ok: false, empty: false, reason, text: retry.text + '\n（重试仍失败：' + reason + '）', childId: retry.childId || first.childId || '' };
 }
 
-/** Ids reachable from the entry Lead via O(V + E) BFS; every other node is skipped at run time. */
+/** Ids reachable from the entry Lead via O(V + E) BFS over forward edges; every other node is skipped at run time. */
 function reachableFrom(plan) {
   const adj = new Map();
-  for (const e of (plan && plan.edges) || []) {
+  for (const e of forwardEdgesOf(plan && plan.edges)) {
     if (!e || !e.from || !e.to) continue;
     if (!adj.has(e.from)) adj.set(e.from, []);
     adj.get(e.from).push(e.to);
@@ -613,19 +715,20 @@ function reachableFrom(plan) {
 /**
  * Classify inactive nodes that are rendered dashed on the canvas and skipped at run time:
  *   - unreachable orphans
- *   - solo chained Leads (zero reachable subagent upstream)
+ *   - solo chained Leads (zero reachable subagent upstream and blank role)
  *   - dangling dead-end subagents (zero outgoing edges while an active non-ancestor downstream Lead exists)
  */
 function inactiveNodeSets(nodes, edges) {
   const list = withoutEntry(nodes);
   const linkList = Array.isArray(edges) ? edges : [];
-  const reachable = reachableFrom({ edges: linkList });
+  const fwdLinks = forwardEdgesOf(linkList);
+  const reachable = reachableFrom({ edges: fwdLinks });
   const byId = new Map(list.map((n) => [n.id, n]));
 
   const soloLeads = new Set();
   for (const n of list) {
     if (n.kind !== 'lead' || !reachable.has(n.id)) continue;
-    const hasAgentUp = linkList.some((e) => {
+    const hasAgentUp = fwdLinks.some((e) => {
       if (!e || e.to !== n.id || !reachable.has(e.from) || e.from === 'lead') return false;
       const src = byId.get(e.from);
       return Boolean(src && src.kind !== 'lead');
@@ -639,7 +742,7 @@ function inactiveNodeSets(nodes, edges) {
   if (activeLeads.length) {
     const hasOut = new Set(linkList.map((e) => e.from));
     const parents = new Map();
-    for (const e of linkList) {
+    for (const e of fwdLinks) {
       if (!parents.has(e.to)) parents.set(e.to, []);
       parents.get(e.to).push(e.from);
     }
@@ -664,11 +767,52 @@ function inactiveNodeSets(nodes, edges) {
 }
 
 /**
+ * Validate controlled loop edges: each loop edge must leave a condition node, target a strict
+ * forward-path ancestor (never entry Lead), and not overlap/cross another loop edge's body.
+ */
+function validateLoopEdges(nodes, edges) {
+  const list = withoutEntry(nodes);
+  const byId = new Map(list.map((n) => [n.id, n]));
+  const linkList = Array.isArray(edges) ? edges : [];
+  const loopEdges = linkList.filter((e) => isLoopEdge(e));
+  const errors = [];
+  const seenMembers = new Map();
+  for (const le of loopEdges) {
+    const src = byId.get(le.from);
+    const dst = byId.get(le.to);
+    if (!src || src.kind !== 'condition') {
+      errors.push('回环边起点必须是条件判断节点（' + le.from + ' → ' + le.to + '）。');
+      continue;
+    }
+    if (!dst || le.to === 'lead') {
+      errors.push('回环边不能指向入口 Lead 或不存在的节点（' + le.from + ' → ' + le.to + '）。');
+      continue;
+    }
+    const members = loopMemberIds(list, linkList, le);
+    if (!members.size) {
+      errors.push('回环边目标「' + (dst.label || dst.id) + '」不是「' + (src.label || src.id) + '」的上游祖先节点。');
+      continue;
+    }
+    let overlap = false;
+    for (const mid of members) {
+      if (seenMembers.has(mid)) { overlap = true; break; }
+    }
+    if (overlap) {
+      errors.push('检测到交叉或嵌套回环（涉及节点「' + (dst.label || dst.id) + '」），暂不支持交叉回环。');
+      continue;
+    }
+    for (const mid of members) seenMembers.set(mid, le);
+  }
+  return errors;
+}
+
+/**
  * Detect structural warnings on a canvas plan (all three classes are rendered
  * dashed on the canvas and skipped at run time):
  *   1. Unreachable nodes.
- *   2. Solo chained Lead nodes with zero subagent upstream.
+ *   2. Solo chained Lead nodes with zero subagent upstream and blank role.
  *   3. Dangling dead-end subagent nodes with zero outgoing edges.
+ *   4. Invalid/crossing loop edges or loop conditions with no forward exit.
  */
 function analyzeCanvasWarnings(nodes, edges) {
   const list = withoutEntry(nodes);
@@ -691,6 +835,27 @@ function analyzeCanvasWarnings(nodes, edges) {
   if (deadList.length) {
     warnings.push('以下子代理节点没有出边，产出未连入下游或终审 Lead，运行时不生效：'
       + deadList.map((n) => (n.label || n.id) + '(' + n.id + ')').join('、'));
+  }
+  for (const err of validateLoopEdges(list, linkList)) warnings.push(err);
+  // Warn if a non-exit node inside a loop has a forward edge leaking outside the loop
+  // (that outside branch starts on round 1 and will not re-run on retry rounds).
+  const fwdLinks = forwardEdgesOf(linkList);
+  const byId = new Map(list.map((n) => [n.id, n]));
+  for (const le of linkList) {
+    if (!isLoopEdge(le)) continue;
+    const members = loopMemberIds(list, linkList, le);
+    if (!members.size) continue;
+    const leaked = [];
+    for (const e of fwdLinks) {
+      if (e.from !== le.from && members.has(e.from) && !members.has(e.to)) {
+        const src = byId.get(e.from);
+        const dst = byId.get(e.to);
+        leaked.push(((src && src.label) || e.from) + ' → ' + ((dst && dst.label) || e.to));
+      }
+    }
+    if (leaked.length) {
+      warnings.push('回环内部节点存在绕过条件裁判的旁路连线（' + leaked.join('、') + '），回环重试时这些环外节点不会重跑。');
+    }
   }
   return warnings;
 }
@@ -770,6 +935,10 @@ function normalizeCanvas(args) {
     const branch = normalizeBranch(raw.branch);
     const edgeObj = { id: 'e' + edges.length, from, to, type };
     if (branch) edgeObj.branch = branch;
+    if (raw.loop === true) {
+      edgeObj.loop = true;
+      edgeObj.maxIterations = normalizeMaxIterations(raw.maxIterations);
+    }
     edges.push(edgeObj);
   }
 
@@ -822,11 +991,11 @@ function normalizeCanvas(args) {
     if (structuredSources.has(node.id)) node.structured = true;
   }
 
-  // Layout: depth of the longest path from the entry, then stack per column.
+  // Layout: depth of the longest path from the entry (ignoring controlled loop back-edges).
   const depth = new Map(nodes.map((n) => [n.id, n.id === 'lead' ? 0 : 1]));
   for (let pass = 0; pass < nodes.length; pass += 1) {
     let changed = false;
-    for (const e of edges) {
+    for (const e of forwardEdgesOf(edges)) {
       if (e.to === 'lead') continue;
       const next = Math.min(nodes.length, depth.get(e.from) + 1);
       if (next > depth.get(e.to)) { depth.set(e.to, next); changed = true; }
@@ -935,9 +1104,23 @@ function applyPatch(plan, args) {
     if (!validFrom || !validTo) continue;
     const type = ['prompt', 'structured', 'session-ref'].includes(edge.type) ? edge.type : 'prompt';
     const branch = normalizeBranch(edge.branch);
-    if (edges.some((e) => e.from === edge.from && e.to === edge.to && e.type === type && normalizeBranch(e.branch) === branch)) continue;
+    const existingEdge = edges.find((e) => e.from === edge.from && e.to === edge.to && e.type === type && normalizeBranch(e.branch) === branch);
+    if (existingEdge) {
+      if (edge.loop === true) {
+        existingEdge.loop = true;
+        existingEdge.maxIterations = normalizeMaxIterations(edge.maxIterations !== undefined ? edge.maxIterations : existingEdge.maxIterations);
+      } else if (edge.loop === false) {
+        delete existingEdge.loop;
+        delete existingEdge.maxIterations;
+      }
+      continue;
+    }
     const nextEdge = { from: edge.from, to: edge.to, type };
     if (branch) nextEdge.branch = branch;
+    if (edge.loop === true) {
+      nextEdge.loop = true;
+      nextEdge.maxIterations = normalizeMaxIterations(edge.maxIterations);
+    }
     edges.push(nextEdge);
   }
   const structuredSources = new Set(edges.filter((e) => e.type === 'structured').map((e) => e.from));
@@ -1067,6 +1250,10 @@ function inspectPlan(sid) {
     };
     const branch = normalizeBranch(e.branch);
     if (branch) out.branch = branch;
+    if (e.loop === true) {
+      out.loop = true;
+      out.maxIterations = normalizeMaxIterations(e.maxIterations);
+    }
     return out;
   }) : [];
   const planRefs = normalizeRefs(plan.refs);
@@ -1187,6 +1374,8 @@ async function executePlan(scope, plan, args, exec) {
 
   const order = orderNodes(plan);
   if (!order) return { error: '存在环，无法执行有向无环图。' };
+  const loopErrors = validateLoopEdges(plan.nodes, plan.edges);
+  if (loopErrors.length) return { error: '回环配置无效：' + loopErrors[0] };
 
   // Defense in depth: unreachable orphans, solo chained Leads, and dangling
   // dead-end subagents are skipped instead of wasting tokens or stalling.
@@ -1234,11 +1423,18 @@ async function executePlan(scope, plan, args, exec) {
         pruned: new Set(Array.from(base.pruned || []).filter((id) => byId.has(id))),
         decisions: { ...(base.decisions || {}) },
         fallbackLinks: Array.isArray(base.fallbackLinks) ? base.fallbackLinks.map((fl) => ({ ...fl })) : [],
+        loopCounts: {},
+        totalLoops: 0,
+        loopHistory: {},
+        loopFeedback: {},
+        nodeAttempts: {},
+        loopWarmChild: {},
+        loopExhausted: [],
         waitingLead: null,
       };
       // Build forward adjacency to invalidate seed nodes and all their downstream dependents.
       const fwd = new Map();
-      for (const e of plan.edges || []) {
+      for (const e of forwardEdgesOf(plan.edges || [])) {
         if (!e || !e.from || !e.to) continue;
         if (!fwd.has(e.from)) fwd.set(e.from, []);
         fwd.get(e.from).push(e.to);
@@ -1293,6 +1489,13 @@ async function executePlan(scope, plan, args, exec) {
       pruned: new Set(),
       decisions: {},
       fallbackLinks: [],
+      loopCounts: {},
+      totalLoops: 0,
+      loopHistory: {},
+      loopFeedback: {},
+      nodeAttempts: {},
+      loopWarmChild: {},
+      loopExhausted: [],
       waitingLead: null,
     };
     runBySession.set(sid, state);
@@ -1302,15 +1505,32 @@ async function executePlan(scope, plan, args, exec) {
   if (!state.pruned) state.pruned = new Set();
   if (!state.decisions) state.decisions = {};
   if (!state.fallbackLinks) state.fallbackLinks = [];
+  if (!state.loopCounts) state.loopCounts = {};
+  if (typeof state.totalLoops !== 'number') state.totalLoops = 0;
+  if (!state.loopHistory) state.loopHistory = {};
+  if (!state.loopFeedback) state.loopFeedback = {};
+  if (!state.nodeAttempts) state.nodeAttempts = {};
+  if (!state.loopWarmChild) state.loopWarmChild = {};
+  if (!state.loopExhausted) state.loopExhausted = [];
 
   const emitRunState = (status, waitingLead) => {
     if (!sid) return;
+    const loopCounts = {};
+    for (const e of plan.edges || []) {
+      if (!isLoopEdge(e)) continue;
+      const k = edgeKey(e);
+      const entry = { count: state.loopCounts[k] || 0, max: normalizeMaxIterations(e.maxIterations) };
+      loopCounts[k] = entry;
+      if (e.id) loopCounts[e.id] = entry;
+    }
     publishRunState(scope, sid, {
       status,
       done: Array.from(state.done || []),
       decisions: { ...state.decisions },
       pruned: Array.from(state.pruned || []),
       blockedEdges: Array.from(state.blockedEdges || []),
+      loopCounts,
+      nodeAttempts: { ...state.nodeAttempts },
       waitingLead: waitingLead ? { id: waitingLead.id, label: waitingLead.label } : null,
     });
   };
@@ -1334,7 +1554,7 @@ async function executePlan(scope, plan, args, exec) {
   };
   const depsOf = (node) => {
     const out = new Set();
-    for (const e of plan.edges || []) {
+    for (const e of forwardEdgesOf(plan.edges || [])) {
       if (e.to === node.id
         && e.from !== 'lead'
         && !state.blockedEdges.has(edgeKey(e))
@@ -1350,7 +1570,7 @@ async function executePlan(scope, plan, args, exec) {
   };
   const nearestDownstreamLead = (startId) => {
     const fwd = new Map();
-    for (const e of plan.edges || []) {
+    for (const e of forwardEdgesOf(plan.edges || [])) {
       if (!e || !e.from || !e.to) continue;
       if (!fwd.has(e.from)) fwd.set(e.from, []);
       fwd.get(e.from).push(e.to);
@@ -1374,7 +1594,7 @@ async function executePlan(scope, plan, args, exec) {
   const branchSkippedList = () => Array.from(state.pruned).map((id) => labelOf.get(id) || id);
   const ancestorsOf = (targetId) => {
     const parents = new Map();
-    for (const e of plan.edges || []) {
+    for (const e of forwardEdgesOf(plan.edges || [])) {
       if (!e || !e.from || !e.to) continue;
       if (!parents.has(e.to)) parents.set(e.to, []);
       parents.get(e.to).push(e.from);
@@ -1390,12 +1610,13 @@ async function executePlan(scope, plan, args, exec) {
     return seen;
   };
   const recomputeBranchPrune = () => {
-    // Re-evaluate reachability from entry Lead over non-blocked edges so diamond
+    // Re-evaluate reachability from entry Lead over non-blocked forward edges so diamond
     // convergence nodes stay active, while side-channel edges from ancestors of a
     // condition node (e.g. A --session-ref--> N) cannot bypass a blocked branch gate.
+    const fwdEdges = forwardEdgesOf(plan.edges || []);
     const condAncestors = new Map();
     const blockedSources = new Map();
-    for (const e of plan.edges || []) {
+    for (const e of fwdEdges) {
       if (!e || !e.from || !e.to) continue;
       if (!state.blockedEdges.has(edgeKey(e))) continue;
       if (!blockedSources.has(e.to)) blockedSources.set(e.to, new Set());
@@ -1431,7 +1652,7 @@ async function executePlan(scope, plan, args, exec) {
 
     for (let pass = 0; pass <= runnable.length; pass += 1) {
       const adj = new Map();
-      for (const e of plan.edges || []) {
+      for (const e of fwdEdges) {
         if (!e || !e.from || !e.to) continue;
         if (state.blockedEdges.has(edgeKey(e))) continue;
         if (state.pruned.has(e.from)) continue;
@@ -1460,7 +1681,7 @@ async function executePlan(scope, plan, args, exec) {
           addedAny = true;
           const gates = gatedBy.get(n.id);
           if (gates && gates.size) {
-            for (const e of plan.edges || []) {
+            for (const e of fwdEdges) {
               if (e && e.from === n.id && e.to) addGates(e.to, gates);
             }
           }
@@ -1492,7 +1713,11 @@ async function executePlan(scope, plan, args, exec) {
       && depsOf(n).every((id) => state.done.has(id)));
     for (const node of candidates) {
       if (isAborted() || haltedReason || inFlight.size >= MAX_PARALLEL) break;
-      const promise = spawnNode(scope, plan, node, state.results, agent, exec.signal, sid, state.failed, state.pruned)
+      const fb = state.loopFeedback[node.id] || null;
+      const warmChildId = (fb && state.loopWarmChild[node.id]) ? state.loopWarmChild[node.id] : '';
+      const loopCtx = fb ? { feedback: fb, warmChildId } : undefined;
+      if (fb) delete state.loopFeedback[node.id];
+      const promise = spawnNode(scope, plan, node, state.results, agent, exec.signal, sid, state.failed, state.pruned, loopCtx)
         .then(
           (outcome) => ({ node, outcome }),
           (err) => ({ node, outcome: { ok: false, reason: 'run-failed', text: '运行失败：' + String((err && err.message) || err) } }),
@@ -1524,6 +1749,7 @@ async function executePlan(scope, plan, args, exec) {
         emptyOutputs: Object.values(state.emptyOutputs),
         decisions: Object.values(state.decisions),
         branchSkipped: branchSkippedList(),
+        ...(state.loopExhausted.length ? { loopExhausted: state.loopExhausted } : {}),
         reused,
         skipped,
       };
@@ -1542,6 +1768,7 @@ async function executePlan(scope, plan, args, exec) {
         emptyOutputs: Object.values(state.emptyOutputs),
         decisions: Object.values(state.decisions),
         branchSkipped: branchSkippedList(),
+        ...(state.loopExhausted.length ? { loopExhausted: state.loopExhausted } : {}),
         reused,
         skipped,
       };
@@ -1626,8 +1853,107 @@ async function executePlan(scope, plan, args, exec) {
           + (reason ? ' ' + reason : '');
         state.done.add(node.id);
         const matchedSet = new Set(matchedIds);
-        for (const e of plan.edges || []) {
-          if (!e || e.from !== node.id) continue;
+        const outEdges = (plan.edges || []).filter((e) => e && e.from === node.id);
+        const matchedEdges = outEdges.filter((e) => {
+          const edgeBranch = normalizeBranch(e.branch) || branches[0].id;
+          return matchedSet.has(edgeBranch);
+        });
+        const matchedLoopEdges = matchedEdges.filter((e) => isLoopEdge(e));
+        const matchedForwardEdges = matchedEdges.filter((e) => !isLoopEdge(e));
+
+        if (matchedLoopEdges.length > 0) {
+          // Loop priority: when a condition matches a controlled loop back-edge,
+          // execute the retry reset (if within bounds) instead of advancing forward branches.
+          const le = matchedLoopEdges[0];
+          const leKey = edgeKey(le);
+          const maxIter = normalizeMaxIterations(le.maxIterations);
+          const used = state.loopCounts[leKey] || 0;
+          const members = loopMemberIds(runnable, plan.edges, le);
+          if (!state.loopHistory[leKey]) state.loopHistory[leKey] = [];
+          state.loopHistory[leKey].push({
+            round: used + 1,
+            reason: reason || '未达预期',
+            sourceLabel: node.label,
+            targetLabel: labelOf.get(le.to) || le.to,
+          });
+          if (used < maxIter && state.totalLoops < MAX_GLOBAL_LOOPS && members.size > 0) {
+            const summaryLines = [];
+            for (const mid of members) {
+              if (mid === node.id) continue;
+              const rawRes = state.results[mid];
+              if (typeof rawRes === 'string' && rawRes.trim()) {
+                const clipped = rawRes.length > 500 ? rawRes.slice(0, 500) + '…' : rawRes;
+                summaryLines.push('[' + (labelOf.get(mid) || mid) + '] ' + clipped);
+              }
+            }
+            const nextRetry = used + 1;
+            state.loopCounts[leKey] = nextRetry;
+            state.totalLoops += 1;
+            for (const mid of members) {
+              state.done.delete(mid);
+              state.pruned.delete(mid);
+              delete state.results[mid];
+              delete state.failed[mid];
+              delete state.emptyOutputs[mid];
+              delete state.decisions[mid];
+              state.nodeAttempts[mid] = { retry: nextRetry, max: maxIter };
+            }
+            for (const e of plan.edges || []) {
+              if (e && members.has(e.from)) state.blockedEdges.delete(edgeKey(e));
+            }
+            state.fallbackLinks = state.fallbackLinks.filter((fl) => !members.has(fl.from) && !members.has(fl.to));
+            state.loopFeedback[le.to] = {
+              retry: nextRetry,
+              max: maxIter,
+              reason: reason || '未达预期',
+              sourceLabel: node.label,
+              lastSummary: summaryLines.join('\n'),
+            };
+            emitRunState('running', null);
+            continue;
+          }
+          // Loop limit reached: stop jumping back and hand off round history to Lead or exit cleanly.
+          const hitGlobalCap = used < maxIter && state.totalLoops >= MAX_GLOBAL_LOOPS;
+          const hist = state.loopHistory[leKey].slice();
+          state.loopExhausted.push({
+            edgeKey: leKey,
+            fromLabel: node.label,
+            toLabel: labelOf.get(le.to) || le.to,
+            iterations: used,
+            maxIterations: maxIter,
+            ...(hitGlobalCap ? { globalLimit: MAX_GLOBAL_LOOPS } : {}),
+            history: hist,
+          });
+          state.decisions[node.id].loopExhausted = true;
+          state.results[node.id] += hitGlobalCap
+            ? ('（已达全局最大回环上限 ' + MAX_GLOBAL_LOOPS + ' 次，停止回跳）')
+            : ('（已达最大回环重试次数 ' + used + '/' + maxIter + '，停止回跳）');
+          for (const e of outEdges) {
+            const edgeBranch = normalizeBranch(e.branch) || branches[0].id;
+            if (isLoopEdge(e) || !matchedSet.has(edgeBranch)) state.blockedEdges.add(edgeKey(e));
+          }
+          if (matchedForwardEdges.length === 0) {
+            const fallbackLead = nearestDownstreamLead(node.id);
+            if (fallbackLead) {
+              state.fallbackLinks.push({
+                from: node.id,
+                to: fallbackLead.id,
+                label: node.label,
+                loopExhausted: true,
+                iterations: used,
+                maxIterations: maxIter,
+                history: hist,
+              });
+              state.decisions[node.id].fallbackLead = fallbackLead.label;
+              state.results[node.id] += '（已汇总历次反馈转交至最近 Lead「' + fallbackLead.label + '」）';
+            }
+          }
+          recomputeBranchPrune();
+          emitRunState('running', null);
+          continue;
+        }
+
+        for (const e of outEdges) {
           const edgeBranch = normalizeBranch(e.branch) || branches[0].id;
           if (!matchedSet.has(edgeBranch)) state.blockedEdges.add(edgeKey(e));
         }
@@ -1648,13 +1974,17 @@ async function executePlan(scope, plan, args, exec) {
       state.results[node.id] = outcome.text;
       if (!outcome.ok) {
         state.failed[node.id] = { id: node.id, label: node.label, reason: outcome.reason || 'unknown' };
+        delete state.loopWarmChild[node.id];
         if (outcome.reason === 'activation-failed') activationFailCount += 1;
       } else if (outcome.empty) {
         state.emptyOutputs[node.id] = { id: node.id, label: node.label };
+        delete state.loopWarmChild[node.id];
+      } else if (outcome.childId) {
+        state.loopWarmChild[node.id] = outcome.childId;
       }
       // If a failing node feeds a condition node, let the condition handle failure routing
       // instead of circuit-breaking the whole run prematurely.
-      const routesToCondition = (plan.edges || []).some((e) => e && e.from === node.id
+      const routesToCondition = forwardEdgesOf(plan.edges || []).some((e) => e && e.from === node.id
         && byId.get(e.to) && byId.get(e.to).kind === 'condition');
       if (!routesToCondition && isPermissionFailure(outcome)) {
         permBlocked.push(node.label || node.id);
@@ -1682,8 +2012,22 @@ async function executePlan(scope, plan, args, exec) {
       }));
     const jumpedEntries = (state.fallbackLinks || []).filter((fl) => fl.to === leadNode.id);
     const failedConds = jumpedEntries.filter((fl) => fl.failed).map((fl) => (fl.label || labelOf.get(fl.from) || fl.from) + '（' + (fl.reason || 'unknown') + '）');
-    const unmatchedConds = jumpedEntries.filter((fl) => !fl.failed).map((fl) => fl.label || labelOf.get(fl.from) || fl.from);
+    const exhaustedConds = jumpedEntries.filter((fl) => fl.loopExhausted);
+    const unmatchedConds = jumpedEntries.filter((fl) => !fl.failed && !fl.loopExhausted).map((fl) => fl.label || labelOf.get(fl.from) || fl.from);
+    const leadFb = state.loopFeedback[leadNode.id] || null;
     const fallbackParts = [];
+    if (leadFb) {
+      fallbackParts.push('↺ 【第 ' + leadFb.retry + '/' + leadFb.max + ' 次回环修正】下游条件节点「' + (leadFb.sourceLabel || '条件判断') + '」判定未通过，理由：' + (leadFb.reason || '未达预期') + '。请结合最新反馈修正此步骤后再继续。');
+    }
+    if (exhaustedConds.length) {
+      const exLines = exhaustedConds.map((fl) => {
+        const rounds = Array.isArray(fl.history)
+          ? fl.history.map((h) => '第' + h.round + '轮：' + h.reason).join('；')
+          : '';
+        return (fl.label || fl.from) + '（已重试 ' + fl.iterations + '/' + fl.maxIterations + ' 次仍未通过' + (rounds ? ' — ' + rounds : '') + '）';
+      });
+      fallbackParts.push('⚠ 回环达到最大次数上限已熔断：' + exLines.join('；') + '。请由你（Lead）审阅历次失败摘要后决定下一步。');
+    }
     if (failedConds.length) {
       fallbackParts.push('⚠ 条件节点（' + failedConds.join('、') + '）自身执行失败，未擅自选择分支，已跳过中间分支直接转交给你处理；也可调用 canvas_workflow({ retryFailed: true }) 复用上游缓存并只重跑该条件节点及其下游。');
     }
@@ -1714,6 +2058,7 @@ async function executePlan(scope, plan, args, exec) {
         emptyOutputs: Object.values(state.emptyOutputs),
         decisions: Object.values(state.decisions),
         branchSkipped: branchSkippedList(),
+        ...(state.loopExhausted.length ? { loopExhausted: state.loopExhausted } : {}),
         sessions: leadSessions,
         reused,
         skipped,
@@ -1735,6 +2080,7 @@ async function executePlan(scope, plan, args, exec) {
           role: leadNode.role || leadNode.label,
           needs: depsOf(leadNode).map((id) => byId.get(id).label),
           ...(normalizeRefs(leadNode.refs) ? { refs: normalizeRefs(leadNode.refs) } : {}),
+          ...(leadFb ? { loopFeedback: { retry: leadFb.retry, max: leadFb.max, sourceLabel: leadFb.sourceLabel, reason: leadFb.reason } } : {}),
         },
         results: state.results,
         labels: state.labels,
@@ -1742,12 +2088,14 @@ async function executePlan(scope, plan, args, exec) {
         emptyOutputs: Object.values(state.emptyOutputs),
         decisions: Object.values(state.decisions),
         branchSkipped: branchSkippedList(),
+        ...(state.loopExhausted.length ? { loopExhausted: state.loopExhausted } : {}),
         sessions: leadSessions,
         hint: (fallbackNotice ? fallbackNotice + ' ' : '')
           + '这一步由你（Lead 本体）完成。完成后再次调用本工具，把结果放进 leadResult 继续；若需从头重跑可传 reset: true。',
       };
     }
     state.waitingLead = null;
+    delete state.loopFeedback[leadNode.id];
     state.results[leadNode.id] = leadResult;
     state.labels[leadNode.id] = leadNode.label;
     state.done.add(leadNode.id);
@@ -1908,6 +2256,8 @@ export function apply(ctx) {
                     to: { type: 'string' },
                     type: { type: 'string', enum: ['prompt', 'structured', 'session-ref'] },
                     branch: { type: 'string', description: 'For edges leaving a condition node: "true" / "false" (default binary) or one of the condition node branch ids.' },
+                    loop: { type: 'boolean', description: 'Optional (condition outgoing edge only): set true to mark a controlled retry back-edge pointing to a strict ancestor node.' },
+                    maxIterations: { type: 'integer', minimum: 1, maximum: 10, description: 'Optional (loop edges only): max retry loops before circuit-breaking (1–10, default 3).' },
                   },
                   required: ['from', 'to'],
                 },
@@ -2173,6 +2523,7 @@ export function apply(ctx) {
                 emptyOutputs: { type: 'array' },
                 decisions: { type: 'array' },
                 branchSkipped: { type: 'array' },
+                loopExhausted: { type: 'array' },
                 sessions: { type: 'array' },
                 reused: { type: 'array' },
                 skipped: { type: 'array' },
@@ -2217,6 +2568,9 @@ export function apply(ctx) {
               const branchSkipNote = Array.isArray(v.branchSkipped) && v.branchSkipped.length
                 ? '\n\n条件未命中已跳过：' + v.branchSkipped.join('、')
                 : '';
+              const loopExNote = Array.isArray(v.loopExhausted) && v.loopExhausted.length
+                ? '\n\n⚠ 回环达上限熔断：' + v.loopExhausted.map((lx) => (lx.fromLabel || lx.edgeKey) + ' ↺ ' + (lx.toLabel || '') + '（' + lx.iterations + '/' + lx.maxIterations + '）').join('；')
+                : '';
               if (v.status === 'need-lead') {
                 const n = v.node || {};
                 const handed = Array.isArray(v.sessions) ? v.sessions.filter((s) => s && s.childId) : [];
@@ -2234,6 +2588,7 @@ export function apply(ctx) {
                     + '\n\n已完成节点的结果：\n' + body
                     + handover
                     + branchSkipNote
+                    + loopExNote
                     + '\n\n' + (v.hint || ''),
                 }];
               }
@@ -2261,12 +2616,13 @@ export function apply(ctx) {
                       + '\n\n已完成节点的结果：\n' + body
                       + handover
                       + branchSkipNote
+                      + loopExNote
                       + reusedNote
                       + skip
                       + '\n\n' + (v.hint || ''),
                   }];
                 }
-                return [{ type: 'text', text: '画布执行完成。' + decisionList + failedList + emptyList + '\n\n' + body + branchSkipNote + reusedNote + skip }];
+                return [{ type: 'text', text: '画布执行完成。' + decisionList + failedList + emptyList + loopExNote + '\n\n' + body + branchSkipNote + reusedNote + skip }];
               }
               return [{ type: 'text', text: JSON.stringify(v) }];
             },
@@ -2289,6 +2645,9 @@ export {
   briefFor,
   normalizeBranches,
   normalizeRefs,
+  normalizeMaxIterations,
+  loopMemberIds,
+  validateLoopEdges,
   parseConditionDecision,
   withoutEntry,
   analyzeCanvasWarnings,
