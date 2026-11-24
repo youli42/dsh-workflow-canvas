@@ -1126,17 +1126,25 @@ window.__ModuleLoader__.load({
       };
     }
 
-    /** Compute unified Stop button visibility, label and tooltip across running & waitingLead states. */
+    /** Compute unified Stop button state across idle, running & waitingLead modes. */
     function stopButtonState({ sessionRunning, runningNodesCount, waitingLead, triggering, stopping, lang }) {
       const en = lang === 'en';
       const hasRunning = Boolean(sessionRunning || triggering || Number(runningNodesCount) > 0);
       const hasWaiting = Boolean(waitingLead);
       if (!hasRunning && !hasWaiting) {
-        return { visible: false, disabled: true, mode: 'idle', label: '', title: '' };
+        return {
+          visible: true,
+          active: false,
+          disabled: true,
+          mode: 'idle',
+          label: en ? '⏹ Stop' : '⏹ 终止',
+          title: en ? 'No running or paused workflow to stop' : '当前没有运行中或等待拍板的任务',
+        };
       }
       const mode = hasRunning ? 'running' : 'waiting';
       return {
         visible: true,
+        active: true,
         disabled: Boolean(stopping),
         mode,
         label: stopping
@@ -2057,50 +2065,100 @@ window.__ModuleLoader__.load({
         {
           id: 'lead', kind: 'lead', label: 'Lead', y: 0,
           task: en
-            ? 'Implement the requested change and verify with tests: if checks fail, automatically loop back with feedback to fix (up to 3 retries), then hand off to me for final review.'
-            : '实现目标功能并跑测试验证：若测试或检查不通过，自动带着失败原因回环修改（最多 3 次），全部通过后交我终审交付。',
+            ? 'Ship OAuth login end-to-end: scan codebase and security constraints in parallel, pause for my sign-off, build core code and tests/docs concurrently with an automated retry loop if checks fail, then deliver to final review.'
+            : '端到端交付 OAuth 登录模块：先并行摸底代码库与安全约束，我拍板后并行开发实现与文档用例；质量门禁未通过则带反馈自动回环修复（最多 3 轮），通过后直达终审交付。',
+          refs: ['AGENTS.md', 'docs/auth-spec.md'],
           provider: '', model: '', role: '',
         },
         {
-          id: 'lp_impl', kind: 'agent', y: 0,
-          label: en ? 'Implement' : '编写实现',
-          provider: '', model: '', reasoning: '', preset: 'standard', keepSession: false,
+          id: 'lp_scan', kind: 'agent', y: 0,
+          label: en ? 'Codebase Scan' : '代码库摸底',
+          provider: '', model: '', reasoning: '', preset: 'standard', keepSession: true,
           role: en
-            ? 'Implement the requested change cleanly. When invoked on a retry round, focus directly on fixing the reported issues and list modified files.'
-            : '按需求完成代码或文档实现；若处于回环修正轮次，针对打回理由直接定点修复并列出改动清单。',
+            ? 'Locate auth routes, session middleware and conventions; keep warm session for Core Implement.'
+            : '定位鉴权路由、会话中间件与工程约定，保留热会话供核心实现无缝续接。',
         },
         {
-          id: 'lp_test', kind: 'agent', y: 0,
-          label: en ? 'Test & Verify' : '测试与检查',
+          id: 'lp_risk', kind: 'agent', y: 100,
+          label: en ? 'Security Spec' : '安全与约束',
+          provider: '', model: '', reasoning: '', preset: 'minimal', keepSession: false,
+          refs: ['docs/security.md'],
+          role: en
+            ? 'Read-only threat check (CSRF, PKCE, token rotation); output structured JSON spec.'
+            : '只读梳理 CSRF、PKCE 与令牌轮换约束，输出结构化 JSON 方案。',
+        },
+        {
+          id: 'lp_signoff', kind: 'lead', y: 0,
+          label: en ? 'Lead Sign-Off' : 'Lead 拍板',
+          provider: '', model: '',
+          role: en
+            ? 'Review structured spec, confirm scope and non-goals, then release parallel delivery.'
+            : '评审结构化安全方案，锁定改动边界与不做的事，放行并行实现。',
+        },
+        {
+          id: 'lp_impl', kind: 'agent', y: 0,
+          label: en ? 'Core Implement' : '核心实现与自测',
+          provider: '', model: '', reasoning: '', preset: 'standard', keepSession: true,
+          role: en
+            ? 'Continue inside scan session to implement OAuth flow and run tests; on retry rounds fix reported defects directly.'
+            : '沿用摸底热会话实现 OAuth 流程并跑测试；若被打回则按反馈定点修复。',
+        },
+        {
+          id: 'lp_docs', kind: 'agent', y: 100,
+          label: en ? 'Docs & Checklist' : '文档与验收清单',
           provider: '', model: '', reasoning: '', preset: 'standard', keepSession: false,
           role: en
-            ? 'Run tests/lint/checks against the implementation and report exact pass/fail status, error logs, and remaining defects.'
-            : '对实现结果运行单测、构建或逐项核验，如实汇报通过情况、具体报错日志与遗留缺陷。',
+            ? 'Update config docs and acceptance checklist in parallel (never touch source files).'
+            : '并行补齐配置文档与验收清单（不改业务源码，与回环实现互不干扰）。',
         },
         {
           id: 'lp_gate', kind: 'condition', y: 0,
-          label: en ? 'Checks Passed?' : '是否通过？',
+          label: en ? 'Quality Gate' : '质量门禁',
           provider: '', model: '', reasoning: '', preset: 'minimal', keepSession: false,
+          branches: [
+            { id: 'true', label: en ? 'Pass' : '通过', when: en ? 'All tests and security checks passed' : '单测与安全核验全部通过' },
+            { id: 'false', label: en ? 'Fix Loop' : '打回修复', when: en ? 'Any test failed or defect remains' : '存在测试失败或未解决缺陷' },
+          ],
           role: en
-            ? 'Return pass=true only if all tests/checks passed with no unresolved defects; otherwise return pass=false with a concise, actionable fix reason.'
-            : '仅当测试与检查全部通过且无未解决缺陷时返回 true；否则返回 false，并在理由里写清下一轮需修复的具体问题。',
+            ? 'Verify test results and security checklist; route to Pass only when clean, otherwise return actionable fix feedback.'
+            : '核验测试结果与安全清单；全部通过走「通过」，否则走「打回修复」并附具体修复理由。',
         },
         {
           id: 'lp_final', kind: 'lead', y: 0,
-          label: en ? 'Lead Final Review' : 'Lead 终审',
+          label: en ? 'Lead Ship Gate' : 'Lead 终审交付',
           provider: '', model: '',
           role: en
-            ? 'Review the verified result (or the round-by-round summary if retries exhausted) and decide whether to ship or intervene.'
-            : '审阅最终通过的改动摘要（或回环达上限后的历次失败记录），确认交付或拍板下一步处理。',
+            ? 'Combine verified implementation and docs into final release summary.'
+            : '汇聚通过门禁的实现与文档，给出最终交付结论。',
         },
       ];
       const loopEdges = [
-        { id: 'lp1', from: 'lead', to: 'lp_impl', type: 'prompt' },
-        { id: 'lp2', from: 'lp_impl', to: 'lp_test', type: 'prompt' },
-        { id: 'lp3', from: 'lp_test', to: 'lp_gate', type: 'prompt' },
-        { id: 'lp4', from: 'lp_gate', to: 'lp_final', type: 'prompt', branch: 'true' },
-        { id: 'lp5', from: 'lp_gate', to: 'lp_impl', type: 'prompt', branch: 'false', loop: true, maxIterations: 3 },
+        { id: 'lp1', from: 'lead', to: 'lp_scan', type: 'prompt' },
+        { id: 'lp2', from: 'lead', to: 'lp_risk', type: 'prompt' },
+        { id: 'lp3', from: 'lp_scan', to: 'lp_signoff', type: 'prompt' },
+        { id: 'lp4', from: 'lp_risk', to: 'lp_signoff', type: 'structured' },
+        { id: 'lp5', from: 'lp_signoff', to: 'lp_impl', type: 'prompt' },
+        { id: 'lp6', from: 'lp_scan', to: 'lp_impl', type: 'session-ref' },
+        { id: 'lp7', from: 'lp_signoff', to: 'lp_docs', type: 'prompt' },
+        { id: 'lp8', from: 'lp_impl', to: 'lp_gate', type: 'prompt' },
+        { id: 'lp9', from: 'lp_gate', to: 'lp_final', type: 'prompt', branch: 'true' },
+        { id: 'lp10', from: 'lp_gate', to: 'lp_impl', type: 'prompt', branch: 'false', loop: true, maxIterations: 3 },
+        { id: 'lp11', from: 'lp_docs', to: 'lp_final', type: 'prompt' },
       ];
+      // Align the loop pair (lp_impl -> lp_gate) on the outer rail side (top in lr, right in tb)
+      // so the dashed loop frame and outer bypass arc never overlap the parallel bypass node lp_docs.
+      const loopLaid = layoutGraph(loopNodes, loopEdges, direction).map((n) => ({ ...n }));
+      const lpById = new Map(loopLaid.map((n) => [n.id, n]));
+      if (direction === 'tb') {
+        const leftX = Math.min(lpById.get('lp_impl').x, lpById.get('lp_docs').x);
+        const rightX = Math.max(lpById.get('lp_impl').x, lpById.get('lp_docs').x);
+        lpById.get('lp_docs').x = leftX;
+        lpById.get('lp_impl').x = rightX;
+        lpById.get('lp_gate').x = rightX;
+      } else {
+        lpById.get('lp_gate').y = lpById.get('lp_impl').y - 8;
+        lpById.get('lp_docs').y = Math.max(lpById.get('lp_docs').y, lpById.get('lp_gate').y + nodeHeight(lpById.get('lp_gate')) + 64);
+      }
       return [
         {
           id: 'tpl-swe',
@@ -2128,8 +2186,8 @@ window.__ModuleLoader__.load({
         },
         {
           id: 'tpl-loop',
-          name: en ? 'Retry Loop: Implement → Test ↺ Fix → Review' : '循环重试：实现 → 测试验收 ↺ 自动修复 → 终审',
-          nodes: layoutGraph(loopNodes, loopEdges, direction),
+          name: en ? 'Full Showcase: Parallel → Gate → Loop ↺ Fix → Ship' : '全功能回环：并行摸底 → 拍板 → 实现 ↺ 门禁 → 终审',
+          nodes: loopLaid,
           edges: loopEdges,
         },
       ];
@@ -5892,15 +5950,23 @@ window.__ModuleLoader__.load({
             stopBtn.visible && h('button', {
               type: 'button',
               disabled: stopBtn.disabled,
-              style: {
-                ...S.floatStop,
-                opacity: stopBtn.disabled ? 0.6 : 1,
-                cursor: stopBtn.disabled ? 'not-allowed' : 'pointer',
-              },
+              style: stopBtn.active
+                ? {
+                    ...S.floatStop,
+                    opacity: stopBtn.disabled ? 0.6 : 1,
+                    cursor: stopBtn.disabled ? 'not-allowed' : 'pointer',
+                  }
+                : {
+                    ...S.floatStop,
+                    border: '1px solid ' + C.border,
+                    color: C.dim,
+                    opacity: 0.55,
+                    cursor: 'not-allowed',
+                  },
               title: stopBtn.title,
-              onMouseEnter: (e) => { if (!stopBtn.disabled) e.currentTarget.style.background = 'rgba(229,83,75,0.18)'; },
+              onMouseEnter: (e) => { if (stopBtn.active && !stopBtn.disabled) e.currentTarget.style.background = 'rgba(229,83,75,0.18)'; },
               onMouseLeave: (e) => { e.currentTarget.style.background = C.elevated; },
-              onClick: () => { if (!stopBtn.disabled) stopWorkflow(); },
+              onClick: () => { if (stopBtn.active && !stopBtn.disabled) stopWorkflow(); },
             }, stopBtn.label),
           ),
           addMenu && (() => {
@@ -6336,7 +6402,7 @@ window.__ModuleLoader__.load({
                           }),
                           btn.label,
                         ),
-                        stopBtn.visible && h('button', {
+                        stopBtn.active && h('button', {
                           type: 'button',
                           disabled: stopBtn.disabled,
                           style: {

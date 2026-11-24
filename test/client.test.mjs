@@ -602,13 +602,24 @@ test('controlled loop helpers: membership, validation, multi-select analysis, by
   assert.ok(!builtBroken.error);
   assert.equal(builtBroken.plan.edges.some((e) => e.loop), false, 'buildPlan strips broken loop edges');
 
-  // Built-in retry loop starter template is valid in both zh and en
+  // Built-in full-showcase retry loop starter template is valid in both zh/en and lr/tb
   for (const lang of ['zh', 'en']) {
-    const loopTpl = client.builtinTemplates(lang).find((t) => t.id === 'tpl-loop');
-    assert.ok(loopTpl, 'includes retry loop template in ' + lang);
-    const le = loopTpl.edges.find((e) => e.loop === true);
-    assert.ok(le && le.maxIterations === 3 && le.branch === 'false');
-    assert.equal(client.loopMemberIdsUI(loopTpl.nodes, loopTpl.edges, le).size, 3);
+    for (const dir of ['lr', 'tb']) {
+      const loopTpl = client.builtinTemplates(lang, dir).find((t) => t.id === 'tpl-loop');
+      assert.ok(loopTpl, `includes retry loop template in ${lang}/${dir}`);
+      const le = loopTpl.edges.find((e) => e.loop === true);
+      assert.ok(le && le.maxIterations === 3 && le.branch === 'false');
+      const members = client.loopMemberIdsUI(loopTpl.nodes, loopTpl.edges, le);
+      assert.equal(members.size, 2, 'loop wraps Core Implement + Quality Gate while bypassing Docs');
+      assert.equal(members.has('lp_docs'), false, 'parallel bypass node stays outside loop');
+      const byId = new Map(loopTpl.nodes.map((n) => [n.id, n]));
+      if (dir === 'lr') {
+        assert.ok(byId.get('lp_docs').y > byId.get('lp_gate').y + client.nodeHeight(byId.get('lp_gate')), 'lr: docs clears loop box vertically');
+      } else {
+        assert.equal(byId.get('lp_impl').x, byId.get('lp_gate').x, 'tb: loop nodes share right lane');
+        assert.ok(byId.get('lp_docs').x < byId.get('lp_impl').x, 'tb: docs sits left of loop rail');
+      }
+    }
   }
 });
 
@@ -676,15 +687,23 @@ test('default direction persistence (#9) and preset change event dispatch (#12)'
 test('stopButtonState & deriveLeadStatuses unlock waitingLead cleanly on halted (#11 & #13)', () => {
   const client = loadClientTestExports();
   const idle = client.stopButtonState({ sessionRunning: false, runningNodesCount: 0, waitingLead: null, triggering: false, stopping: false, lang: 'zh' });
-  assert.equal(idle.visible, false);
+  assert.equal(idle.visible, true);
+  assert.equal(idle.active, false);
+  assert.equal(idle.disabled, true);
+  assert.equal(idle.mode, 'idle');
+  assert.equal(idle.label, '⏹ 终止');
 
   const running = client.stopButtonState({ sessionRunning: true, runningNodesCount: 1, waitingLead: null, triggering: false, stopping: false, lang: 'zh' });
   assert.equal(running.visible, true);
+  assert.equal(running.active, true);
+  assert.equal(running.disabled, false);
   assert.equal(running.mode, 'running');
   assert.equal(running.label, '⏹ 终止');
 
   const waiting = client.stopButtonState({ sessionRunning: false, runningNodesCount: 0, waitingLead: { id: 'gate', label: 'Lead 拍板' }, triggering: false, stopping: false, lang: 'en' });
   assert.equal(waiting.visible, true);
+  assert.equal(waiting.active, true);
+  assert.equal(waiting.disabled, false);
   assert.equal(waiting.mode, 'waiting');
   assert.equal(waiting.label, '⏹ Stop');
 

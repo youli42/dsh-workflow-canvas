@@ -81,8 +81,7 @@ run), `cancel: true` (cleanly stop an active or paused `need-lead` run),
 failed/target segments plus downstream), and `clearMemory: true` (forget saved
 `keepSession` memories). While enabled, a per-session runtime context notifies
 the agent automatically. While running or paused at an intermediate Lead node,
-a unified red **`⏹ Stop`** button appears beside `● ON` and on the Entry Lead
-card to interrupt all running subagents, cancel the root turn, and clear any
+a unified **`⏹ Stop`** button stays visible beside `● ON` (muted when idle, lighting up red alongside a compact `⏹` on the Entry Lead card while running or paused at an intermediate Lead) to interrupt all running subagents, cancel the root turn, and clear any
 Lead pause via `/canvas-stop`. Intermediate Lead nodes pause with
 `status: "need-lead"` and report `decisions` / `branchSkipped` / `failed` /
 `emptyOutputs` plus `session` handovers and merged `refs`; a terminal Lead
